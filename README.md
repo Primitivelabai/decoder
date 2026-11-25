@@ -76,12 +76,28 @@ Open `http://127.0.0.1:3000`.
 
 ## Command line
 
+Install the `decoder` command from npm (Node.js 22.12 or newer):
+
 ```sh
-npm run decoder -- init example.decoder.json "Example system"
-npm run decoder -- validate example.decoder.json
-npm run decoder -- preview example.decoder.json
-npm run decoder -- render example.decoder.json plate.svg patent
-npm run decoder -- package example.decoder.json exhibit.html
+npm install -g primitive-decoder
+```
+
+```sh
+decoder init example.decoder.json "Example system"
+decoder validate example.decoder.json
+decoder preview example.decoder.json
+decoder render example.decoder.json plate.svg patent
+decoder package example.decoder.json exhibit.html
+```
+
+Or run it once without installing: `npx primitive-decoder validate example.decoder.json`. In a checkout of this repository, use `npm run decoder -- <command>`.
+
+The same engine is available as a library:
+
+```js
+import { DecoderSDK } from 'primitive-decoder';
+
+const report = new DecoderSDK().validate(project);
 ```
 
 `package` writes one self-contained HTML file: the same renderer and simulation as the Studio, the project data, and a vector fallback plate for devices without WebGL. It makes no network requests.
