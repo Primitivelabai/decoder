@@ -1,0 +1,391 @@
+@import '@fontsource/geist/400.css';
+@import '@fontsource/geist/500.css';
+@import '@fontsource/geist/600.css';
+@import '@fontsource/geist/700.css';
+@import '@fontsource/geist-mono/400.css';
+@import '@fontsource/geist-mono/500.css';
+@import '@fontsource/space-grotesk/500.css';
+@import '@fontsource/space-grotesk/700.css';
+@import 'tailwindcss';
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Design tokens. One accent (pink), used only for play, the active rail marker,
+   focus, selected or progress state, and items in a feedback loop. */
+@theme {
+  --color-chrome: #09080c;
+  --color-panel: #0f0e12;
+  --color-stage: #111419;
+  --color-ink: #f5f5f5;
+  --color-accent: #ff4f9a;
+  --color-model: #6f7d8c;
+  --color-danger: #ff6b6b;
+
+  --font-sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'Geist Mono', ui-monospace, monospace;
+  --font-wordmark: 'Space Grotesk', ui-sans-serif, sans-serif;
+
+  --ease-dc: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root {
+  --dc-chrome: #09080c;
+  --dc-panel: #0f0e12;
+  --dc-viewport: #111419;
+  --dc-text: #f5f5f5;
+  --dc-text-body: rgba(245, 245, 245, 0.72);
+  --dc-text-secondary: rgba(245, 245, 245, 0.6);
+  --dc-text-muted: rgba(245, 245, 245, 0.5);
+  --dc-text-label: rgba(245, 245, 245, 0.4);
+  --dc-line-subtle: rgba(245, 245, 245, 0.08);
+  --dc-line: rgba(245, 245, 245, 0.12);
+  --dc-line-strong: rgba(245, 245, 245, 0.18);
+  --dc-line-control: rgba(245, 245, 245, 0.28);
+  --dc-fill-hover: rgba(245, 245, 245, 0.05);
+  --dc-fill-active: rgba(245, 245, 245, 0.1);
+  --dc-fill-sunken: rgba(245, 245, 245, 0.03);
+  --dc-accent: #ff4f9a;
+  --dc-on-accent: #09080c;
+  --dc-status-model: #6f7d8c;
+  --dc-ease: cubic-bezier(0.16, 1, 0.3, 1);
+  --dc-dur: 240ms;
+  --dc-dur-panel: 420ms;
+}
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 1.5;
+    background-color: var(--dc-chrome);
+    color: var(--dc-text);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  button {
+    cursor: pointer;
+  }
+
+  button:disabled {
+    cursor: default;
+  }
+
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@layer components {
+  /* Mono uppercase label: 11px, 0.14em tracking. */
+  .dc-label {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--dc-text-label);
+    line-height: 1.4;
+  }
+
+  /* Ghost pill button. */
+  .dc-btn {
+    appearance: none;
+    font: inherit;
+    color: var(--dc-text-body);
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    white-space: nowrap;
+    transition:
+      background var(--dc-dur) var(--dc-ease),
+      color var(--dc-dur) var(--dc-ease),
+      border-color var(--dc-dur) var(--dc-ease);
+  }
+  .dc-btn:hover:not(:disabled) {
+    background: var(--dc-fill-hover);
+    color: var(--dc-text);
+  }
+  .dc-btn:active:not(:disabled) {
+    opacity: 0.82;
+  }
+  .dc-btn:disabled {
+    opacity: 0.35;
+  }
+  .dc-btn[aria-pressed='true'],
+  .dc-btn[aria-checked='true'],
+  .dc-btn[aria-selected='true'],
+  .dc-btn[data-active='true'] {
+    background: var(--dc-fill-active);
+    color: var(--dc-text);
+  }
+
+  /* Outlined secondary pill. */
+  .dc-btn-outline {
+    border-color: var(--dc-line-strong);
+  }
+  .dc-btn-outline:hover:not(:disabled) {
+    border-color: var(--dc-line-control);
+  }
+
+  /* The one filled accent button: play/pause. */
+  .dc-btn-accent {
+    background: var(--dc-accent);
+    color: var(--dc-on-accent);
+  }
+  .dc-btn-accent:hover:not(:disabled) {
+    background: var(--dc-accent);
+    color: var(--dc-on-accent);
+    opacity: 0.9;
+  }
+
+  /* Underlined tab. */
+  .dc-tab {
+    appearance: none;
+    font: inherit;
+    height: 36px;
+    padding: 0 8px;
+    color: var(--dc-text-body);
+    background: transparent;
+    border: 0;
+    border-bottom: 2px solid transparent;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    transition: color var(--dc-dur) var(--dc-ease);
+  }
+  .dc-tab:hover {
+    color: var(--dc-text);
+  }
+  .dc-tab[aria-selected='true'] {
+    color: var(--dc-text);
+    border-bottom-color: var(--dc-accent);
+  }
+
+  /* Floating surface: panels, menus, dock, rail. */
+  .dc-surface {
+    background: var(--dc-panel);
+    border: 1px solid var(--dc-line);
+    border-radius: 12px;
+  }
+  .dc-popover {
+    background: var(--dc-panel);
+    border: 1px solid var(--dc-line);
+    border-radius: 12px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  }
+
+  /* Text fields. */
+  .dc-field {
+    box-sizing: border-box;
+    width: 100%;
+    min-width: 0;
+    height: 36px;
+    padding: 0 10px;
+    background: var(--dc-fill-sunken);
+    border: 1px solid var(--dc-line);
+    border-radius: 8px;
+    color: var(--dc-text);
+    font: inherit;
+  }
+  textarea.dc-field {
+    height: auto;
+    padding: 8px 10px;
+    resize: vertical;
+  }
+  select.dc-field {
+    appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23f5f5f5' stroke-opacity='.6' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 30px;
+  }
+  select.dc-field option {
+    background: var(--dc-panel);
+    color: var(--dc-text);
+  }
+  .dc-field:focus {
+    outline: 2px solid var(--dc-accent);
+    outline-offset: 1px;
+  }
+
+  /* Range slider. Set --fill (0%–100%) inline; add .dc-range-accent for a pink fill. */
+  .dc-range {
+    --fill: 0%;
+    --fill-color: var(--dc-text);
+    -webkit-appearance: none;
+    appearance: none;
+    height: 24px;
+    margin: 0;
+    background: transparent;
+    cursor: pointer;
+  }
+  .dc-range-accent {
+    --fill-color: var(--dc-accent);
+  }
+  .dc-range::-webkit-slider-runnable-track {
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(to right, var(--fill-color) var(--fill), var(--dc-line-strong) var(--fill));
+  }
+  .dc-range::-moz-range-track {
+    height: 2px;
+    border-radius: 2px;
+    background: linear-gradient(to right, var(--fill-color) var(--fill), var(--dc-line-strong) var(--fill));
+  }
+  .dc-range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    margin-top: -7px;
+    border-radius: 8px;
+    background: var(--dc-text);
+    border: 3px solid var(--dc-panel);
+    box-sizing: border-box;
+  }
+  .dc-range::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 8px;
+    background: var(--dc-text);
+    border: 3px solid var(--dc-panel);
+    box-sizing: border-box;
+  }
+  .dc-range:focus {
+    outline: none;
+  }
+  .dc-range:focus-visible::-webkit-slider-thumb {
+    outline: 2px solid var(--dc-accent);
+    outline-offset: 1px;
+  }
+
+  /* Square switch. */
+  .dc-switch {
+    appearance: none;
+    flex: none;
+    width: 40px;
+    height: 24px;
+    padding: 2px;
+    border-radius: 6px;
+    border: 1px solid var(--dc-line-control);
+    background: transparent;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    transition: background var(--dc-dur) var(--dc-ease);
+  }
+  .dc-switch > span {
+    width: 18px;
+    height: 18px;
+    border-radius: 4px;
+    background: var(--dc-text-muted);
+  }
+  .dc-switch[aria-checked='true'] {
+    background: var(--dc-text);
+    border-color: var(--dc-text);
+    justify-content: flex-end;
+  }
+  .dc-switch[aria-checked='true'] > span {
+    background: var(--dc-chrome);
+  }
+  .dc-switch:disabled {
+    opacity: 0.35;
+  }
+
+  .dc-kbd {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    padding: 1px 6px;
+    border: 1px solid var(--dc-line);
+    border-radius: 4px;
+    color: var(--dc-text-muted);
+    line-height: 1.4;
+  }
+}
+
+/* Panels slide in from the rail. */
+@keyframes dc-panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(24px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes dc-pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+.dc-anim-panel {
+  animation: dc-panel-in var(--dc-dur-panel) var(--dc-ease);
+}
+.dc-anim-pop {
+  animation: dc-pop-in var(--dc-dur) var(--dc-ease);
+}
+@media (prefers-reduced-motion: reduce) {
+  .dc-anim-panel,
+  .dc-anim-pop {
+    animation: none;
+  }
+}
+
+/* Quiet scrollbars. */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(245, 245, 245, 0.14);
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(245, 245, 245, 0.25);
+}
+
+:focus-visible {
+  outline: 2px solid var(--dc-accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: rgba(255, 79, 154, 0.3);
+}
+
+/* Overlay text over a light scene backdrop. Phones keep the dark card behind the overlay. */
+@media (min-width: 768px) {
+  .dc-on-light {
+    --color-ink: #121318;
+    --dc-text: #121318;
+    --dc-text-body: rgba(18, 19, 24, 0.78);
+    --dc-text-secondary: rgba(18, 19, 24, 0.68);
+    --dc-text-muted: rgba(18, 19, 24, 0.58);
+    --dc-text-label: rgba(18, 19, 24, 0.55);
+    --dc-line-subtle: rgba(18, 19, 24, 0.1);
+    --dc-line: rgba(18, 19, 24, 0.16);
+    --dc-line-strong: rgba(18, 19, 24, 0.24);
+    --dc-line-control: rgba(18, 19, 24, 0.34);
+    --dc-fill-hover: rgba(18, 19, 24, 0.06);
+    --dc-fill-active: rgba(18, 19, 24, 0.1);
+    --dc-fill-sunken: rgba(18, 19, 24, 0.04);
+  }
+}
