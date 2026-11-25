@@ -1,14 +1,40 @@
 {
   "name": "primitive-decoder",
   "version": "0.1.0",
-  "private": true,
   "description": "Local-first procedural system visualisation engine",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
     "url": "https://github.com/Primitivelabai/decoder.git"
   },
+  "homepage": "https://primitivelabai.github.io/decoder/",
+  "bugs": "https://github.com/Primitivelabai/decoder/issues",
+  "keywords": [
+    "3d",
+    "visualisation",
+    "diagram",
+    "exploded-view",
+    "technical-illustration",
+    "three",
+    "cli"
+  ],
   "type": "module",
+  "bin": {
+    "decoder": "lib/cli.js"
+  },
+  "exports": {
+    ".": {
+      "types": "./lib/types/sdk/index.d.ts",
+      "import": "./lib/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "types": "./lib/types/sdk/index.d.ts",
+  "files": [
+    "lib",
+    "skills",
+    "THIRD_PARTY_NOTICES.md"
+  ],
   "engines": {
     "node": ">=22.12"
   },
@@ -31,32 +57,35 @@
     "pretest": "npm run bundle:standalone",
     "predecoder": "npm run bundle:standalone",
     "preverify:exports": "npm run bundle:standalone",
-    "prelint": "npm run bundle:standalone"
+    "prelint": "npm run bundle:standalone",
+    "build:package": "npm run bundle:standalone && node scripts/build-package.mjs",
+    "prepack": "npm run build:package",
+    "prepublishOnly": "npm run check"
   },
   "dependencies": {
+    "@types/three": "^0.187.0",
+    "ajv": "^8.20.0",
+    "three": "^0.187.0"
+  },
+  "devDependencies": {
     "@fontsource/geist": "^5.3.0",
     "@fontsource/geist-mono": "^5.3.0",
     "@fontsource/space-grotesk": "^5.3.0",
-    "ajv": "^8.20.0",
-    "lucide-react": "^0.546.0",
-    "react": "^19.0.1",
-    "react-dom": "^19.0.1",
-    "three": "^0.187.0",
-    "three-bvh-csg": "^0.0.19",
-    "three-gpu-pathtracer": "^0.0.28",
-    "three-mesh-bvh": "^0.10.0"
-  },
-  "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^22.14.0",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@types/three": "^0.187.0",
     "@vitejs/plugin-react": "^6.1.1",
     "esbuild": "^0.28.0",
+    "lucide-react": "^0.546.0",
     "playwright": "^1.65.0",
     "prettier": "^3.10.1",
+    "react": "^19.0.1",
+    "react-dom": "^19.0.1",
     "tailwindcss": "^4.3.3",
+    "three-bvh-csg": "^0.0.19",
+    "three-gpu-pathtracer": "^0.0.28",
+    "three-mesh-bvh": "^0.10.0",
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.0"
