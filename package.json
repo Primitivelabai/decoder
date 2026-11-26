@@ -58,7 +58,7 @@
     "predecoder": "npm run bundle:standalone",
     "preverify:exports": "npm run bundle:standalone",
     "prelint": "npm run bundle:standalone",
-    "build:package": "npm run bundle:standalone && node scripts/build-package.mjs",
+    "build:package": "node scripts/build-standalone.mjs --force && node scripts/build-package.mjs",
     "prepack": "npm run build:package",
     "prepublishOnly": "npm run check"
   },

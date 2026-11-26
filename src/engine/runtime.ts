@@ -166,7 +166,10 @@ export class DecoderRuntime {
         label: out.label,
         value: val,
         unit: out.unit as MeasurementUnit,
-        formatted: `${val.toFixed(prec)} ${out.unit === 'unitless' ? '' : out.unit}`.trim(),
+        formatted:
+          out.unit === '%'
+            ? `${val.toFixed(prec)}%`
+            : `${val.toFixed(prec)} ${out.unit === 'unitless' ? '' : out.unit}`.trim(),
       };
     });
 

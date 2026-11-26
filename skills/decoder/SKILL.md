@@ -27,13 +27,14 @@ Never edit renderer, Studio or runtime code to represent a subject. Everything a
    Study a built-in exhibit in `src/projects/` that is close to the subject before writing your own.
 
 2. **Describe three synchronised layers.**
-   - `components`: nested parts, each with `geometry`, `materialId`, `transform`, `disassembly` and `evidence`.
+   - `components`: nested parts, each with `geometry`, `materialId`, `transform`, `disassembly` and `evidence`. Every geometry type, its params and defaults, plus modifiers and booleans, are listed in [GEOMETRY.md](GEOMETRY.md). Unknown params are ignored silently, so check spelling there.
    - `relationships`: typed edges between parts: `force`, `torque`, `rotation`, `translation`, `electrical_power`, `information`, `signal`, `liquid_flow`, `gas_flow`, `heat`, `chemical_exchange`, `optical_transmission`, `control`, `feedback`, `logical_dependency`.
+   - `effects`: illustrative particles, glows and rays. `radius` is particle size, not coverage; keep it small (a few hundredths of the model's size) and use `path` and `density` to cover an area.
    - `simulation` and `behaviours`: safe declarative expressions (`sin`, `cos`, `clamp`, `lerp`, `if`, `mod`, `sliderCrank`, `conrodAngle`, lookup tables, ODEs and state machines). No code is ever evaluated.
 
 3. **Validate until clean.**
    `npm run decoder -- validate <name>.decoder.json`
-   Fix every error on the component it names (`MISSING_MATERIAL`, `INVALID_GEOMETRY_DIMENSION`, `INVALID_EXPRESSION`, `BROKEN_PARENT_REFERENCE` and so on). Treat warnings as work to do, not noise.
+   Fix every error on the component it names (`MISSING_MATERIAL`, `UNKNOWN_GEOMETRY_TYPE`, `INVALID_GEOMETRY_DIMENSION`, `INVALID_EXPRESSION`, `BROKEN_PARENT_REFERENCE` and so on). Treat warnings as work to do, not noise.
 
 4. **Inspect and simulate.**
    `npm run decoder -- inspect <name>.decoder.json` prints diagnostics, bounds and the disassembly plan.
