@@ -106,7 +106,13 @@ The `.decoder.json` format is defined in `src/engine/schema.ts`. See `docs/ARCHI
 
 ## Use it from an agent
 
-`skills/decoder` is an agent skill (a `SKILL.md` in the open skills format) that teaches an agent to author, validate and package exhibits with this repository. Install it into the agent you use:
+`skills/decoder` is an agent skill (a `SKILL.md` in the open skills format) that teaches an agent to author, validate and package exhibits. The skill runs commands through `npx primitive-decoder`, so it works without a checkout. Install it with the open skills installer:
+
+```sh
+npx skills add Primitivelabai/decoder --skill decoder
+```
+
+Or, from a checkout, install it into the agent you use:
 
 ```sh
 npm run install-skill -- claude    # ~/.claude/skills/decoder
@@ -118,7 +124,7 @@ npm run install-skill -- agents    # ~/.agents/skills/decoder (shared folder rea
 npm run install-skill -- --dir <path>
 ```
 
-The installer copies the skill and records this checkout's path beside it, so the agent knows where to run commands. Restart the agent afterwards. For an agent without skill support, give it the contents of `skills/decoder/SKILL.md` as instructions.
+The checkout installer also records the checkout's path beside the skill, so the agent can open the Studio and read the built-in exhibits there. Restart the agent afterwards. For an agent without skill support, give it the contents of `skills/decoder/SKILL.md` as instructions.
 
 Then ask for something like _"make a decoder exhibit of a bicycle derailleur"_.
 
