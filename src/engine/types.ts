@@ -28,6 +28,7 @@ export type MeasurementUnit =
   | 'N'
   | 'Nm'
   | 'ratio'
+  | '%'
   | 'unitless';
 
 export type EvidenceClassification = 'observed' | 'documented' | 'inferred' | 'illustrative' | 'unknown';

@@ -266,3 +266,38 @@ test('technical illustrations are well-formed SVG markup for every aesthetic', (
     );
   }
 });
+
+test('validation warns when an effect radius swamps the model, and not at normal sizes', () => {
+  const sdk = new DecoderSDK();
+  const p = structuredClone(BUILTIN_EXHIBITS[0]);
+  assert.ok(p.effects.length > 0);
+  assert.ok(!sdk.validate(p).issues.some((i) => i.code === 'EFFECT_RADIUS_TOO_LARGE'));
+  p.effects[0].radius = 1.5;
+  const issue = sdk.validate(p).issues.find((i) => i.code === 'EFFECT_RADIUS_TOO_LARGE');
+  assert.equal(issue?.severity, 'warning');
+  assert.equal(issue?.path, `/effects/${p.effects[0].id}/radius`);
+  sdk.dispose();
+});
+
+test('percent outputs read as 42.5% and split into number and unit', async () => {
+  const { splitReadout, unitText } = await import('../components/ui/labels');
+  const p = structuredClone(BUILTIN_EXHIBITS[0]);
+  p.simulation.outputs = [{ id: 'duty', label: 'Duty', expression: '42.5', unit: '%', precision: 1 }];
+  const sdk = new DecoderSDK();
+  const out = sdk.simulateStep(p, 0).outputs[0];
+  assert.equal(out.formatted, '42.5%');
+  assert.deepEqual(splitReadout(out.formatted, '%'), { value: '42.5', unit: '%' });
+  assert.equal(unitText('%'), '%');
+  sdk.dispose();
+});
+
+test('validation rejects an unknown geometry type instead of drawing a placeholder', () => {
+  const sdk = new DecoderSDK();
+  const p = structuredClone(BUILTIN_EXHIBITS[0]);
+  const comp = p.components.find((c) => c.geometry)!;
+  (comp.geometry as { type: string }).type = 'blob';
+  const issue = sdk.validate(p).issues.find((i) => i.code === 'UNKNOWN_GEOMETRY_TYPE');
+  assert.equal(issue?.severity, 'error');
+  assert.equal(issue?.componentId, comp.id);
+  sdk.dispose();
+});

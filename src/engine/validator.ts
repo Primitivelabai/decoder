@@ -1,7 +1,53 @@
 import { validateExpressionSyntax, validateExpressionReferences } from './expressions';
 import { validateSchema } from './schema';
-import { computeWorldPositionMap, estimateGeometryLocalBounds } from './spatial';
-import type { DecoderProject, ValidationIssue, ValidationReport } from './types';
+import { computeModelBounds, computeWorldPositionMap, estimateGeometryLocalBounds } from './spatial';
+import type { DecoderProject, PrimitiveType, ValidationIssue, ValidationReport } from './types';
+
+const EFFECT_REACH = 3.5;
+
+// Every geometry type buildPrimitive knows. Record<PrimitiveType, true> makes the compiler flag a missing one.
+const GEOMETRY_TYPES: Record<PrimitiveType, true> = {
+  box: true,
+  rounded_box: true,
+  cylinder: true,
+  tapered_cylinder: true,
+  sphere: true,
+  ellipsoid: true,
+  cone: true,
+  torus: true,
+  tube: true,
+  hollow_vessel: true,
+  dome: true,
+  extrude: true,
+  revolve: true,
+  loft: true,
+  sweep: true,
+  thin_shell: true,
+  rib: true,
+  gear: true,
+  thread: true,
+  spring: true,
+  bearing: true,
+  fastener: true,
+  flange: true,
+  gasket_ring: true,
+  pipe_network: true,
+  flexible_hose: true,
+  layered_surface: true,
+  branching_structure: true,
+  custom_mesh: true,
+  instanced: true,
+  piston_cylinder: true,
+  gear_train: true,
+  pump_unit: true,
+  electric_motor: true,
+  circuit_board: true,
+  heat_exchanger: true,
+  hydraulic_manifold: true,
+  vascular_branch: true,
+  molecular_lattice: true,
+  processor_die: true,
+};
 
 function isFiniteVec3(v: unknown): v is [number, number, number] {
   return Array.isArray(v) && v.length === 3 && v.every((n) => typeof n === 'number' && Number.isFinite(n));
@@ -131,6 +177,16 @@ export function validateProject(project: DecoderProject): ValidationReport {
 
     // Validate geometry numeric parameters
     if (comp.geometry) {
+      if (!Object.hasOwn(GEOMETRY_TYPES, comp.geometry.type)) {
+        issues.push({
+          code: 'UNKNOWN_GEOMETRY_TYPE',
+          severity: 'error',
+          path: `/components/${comp.id}/geometry/type`,
+          componentId: comp.id,
+          message: `Unknown geometry type "${comp.geometry.type}" on "${comp.name}"; it would render as a placeholder cube.`,
+          repairHint: `Use one of: ${Object.keys(GEOMETRY_TYPES).join(', ')}.`,
+        });
+      }
       for (const [pk, pv] of Object.entries(comp.geometry.params)) {
         if (typeof pv === 'number') {
           if (!Number.isFinite(pv)) {
@@ -438,6 +494,27 @@ export function validateProject(project: DecoderProject): ValidationReport {
           path: `/components/${b.comp.id}/transform`,
           componentId: b.comp.id,
           message: `Component "${b.comp.name}" is positioned unusually far from the main assembly.`,
+        });
+      }
+    }
+  }
+
+  // Effect radius is the particle size; glows reach about 3x it and vapour spreads 3.5x it.
+  // Past a quarter of the model's largest dimension the effect swamps the parts it explains.
+  if (project.effects.length && project.components.some((c) => c.geometry)) {
+    const modelSize = Math.max(...computeModelBounds(project).size);
+    for (const eff of project.effects) {
+      if (typeof eff.radius !== 'number' || !Number.isFinite(eff.radius)) continue;
+      const reach = eff.radius * EFFECT_REACH;
+      if (reach > modelSize * 0.25) {
+        const suggested = Number(((modelSize * 0.25) / EFFECT_REACH).toPrecision(2));
+        issues.push({
+          code: 'EFFECT_RADIUS_TOO_LARGE',
+          severity: 'warning',
+          path: `/effects/${eff.id}/radius`,
+          componentId: eff.targetComponentId,
+          message: `Effect "${eff.label}" has radius ${eff.radius}, so its particles reach about ${Number(reach.toPrecision(2))} across a model ${Number(modelSize.toPrecision(2))} wide.`,
+          repairHint: `Effect radius is particle size, not coverage. Try ${suggested} or less; use path or density for coverage.`,
         });
       }
     }

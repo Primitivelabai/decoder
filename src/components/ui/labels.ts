@@ -65,7 +65,7 @@ export function formatNumber(value: number, step?: number): string {
 /** Splits a runtime readout ("9.0 bar") into its number and unit. */
 export function splitReadout(formatted: string, unit: MeasurementUnit): { value: string; unit: string } {
   const [value] = formatted.split(' ');
-  return { value, unit: unitText(unit) };
+  return { value: unit === '%' ? value.replace(/%$/, '') : value, unit: unitText(unit) };
 }
 
 export const LIGHTING_LABELS: Record<LightingPresetId, string> = {
