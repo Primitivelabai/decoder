@@ -105,7 +105,8 @@ function createStudioHdrEquirectTexture(): THREE.DataTexture {
 
     for (let x = 0; x < width; x++) {
       const u = x / (width - 1);
-      const phi = u * Math.PI * 2;
+      // three.js samples equirect maps at u = atan2(z, x) / 2π + 0.5, so u = 0 faces -x.
+      const phi = u * Math.PI * 2 - Math.PI;
       const dx = sinT * Math.cos(phi);
       const dy = cosT;
       const dz = sinT * Math.sin(phi);
@@ -140,9 +141,9 @@ function createStudioHdrEquirectTexture(): THREE.DataTexture {
       g += fillBox * 0.76;
       b += fillBox * 0.84;
 
-      // Crisp rear rim strip light
-      const rimDot = -dx * 0.32 + dy * 0.34 - dz * 0.88;
-      const rimStrip = THREE.MathUtils.smoothstep(rimDot, 0.84, 0.94);
+      // Crisp rear rim strip light, kept near the horizon for the same reason as the rim light.
+      const rimDot = -dx * 0.34 + dy * 0.12 - dz * 0.93;
+      const rimStrip = THREE.MathUtils.smoothstep(rimDot, 0.9, 0.96);
       r += rimStrip * 3.1;
       g += rimStrip * 3.35;
       b += rimStrip * 3.75;
@@ -457,7 +458,9 @@ export class DecoderViewport {
     this.scene.add(this.keyLight);
 
     this.rimLight = new THREE.DirectionalLight('#93c5fd', 1.18);
-    this.rimLight.position.set(-6, 5, -7);
+    // Low behind the model: at (-6, 5, -7) every flat glossy top mirrored it straight into the
+    // default front-right camera, so dark plastics and paint read as silver.
+    this.rimLight.position.set(-6, 1.4, -7);
     this.scene.add(this.rimLight);
 
     this.fillLight = new THREE.DirectionalLight('#dbeafe', 0.65);
