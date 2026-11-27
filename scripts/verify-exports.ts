@@ -118,8 +118,14 @@ async function verify(browser: Browser, file: string, webgl: boolean): Promise<R
 
     const t0 = await time();
     await page.click('#play');
-    await wait(1500);
-    checks.playAdvances = (await page.locator('#play').innerText()) === 'Pause' && (await time()) > t0;
+    // Software WebGL (SwiftShader) can take a few seconds to draw the first
+    // frames of the heavier exhibits, so poll rather than sample once.
+    let advanced = false;
+    for (let waited = 0; waited < 5000 && !advanced; waited += 250) {
+      await wait(250);
+      advanced = (await time()) > t0;
+    }
+    checks.playAdvances = (await page.locator('#play').innerText()) === 'Pause' && advanced;
     await page.click('#play');
     const pausedAt = await time();
     const pausedOutputs = await outputs();
