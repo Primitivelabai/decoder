@@ -31,6 +31,14 @@ A big step up in how exhibits look, in the live viewer, in Studio and in standal
 - `scripts/capture-gpu-showcase.ts` captures matched stills and a disassembly video from the standalone viewer. It checks the browser's actual WebGL renderer and refuses to save anything unless it is running on a physical GPU, so captures are never mistaken for software renders.
 - The export checks now wait for playback to start rather than sampling once, which keeps them reliable on software WebGL.
 
+### Photos
+
+Rendered with software WebGL (SwiftShader). Hardware GPU shots are still to come.
+
+<img src="docs/media/v0.2.0-espresso.webp" alt="The espresso machine in cutaway view, with a brass boiler, glossy black group head and see-through shell" width="100%">
+
+<img src="docs/media/v0.2.0-engine.webp" alt="The four-stroke engine pulled apart, with 3D guide rods showing where each part seats" width="49%"> <img src="docs/media/v0.2.0-watch.webp" alt="The mechanical watch pulled apart, with gold and blue gears and guide rods back to the case" width="49%">
+
 ### Known limits
 
 - Side-by-side comparisons so far were rendered with software WebGL (SwiftShader). A comparison on physical GPU hardware is still to come.
