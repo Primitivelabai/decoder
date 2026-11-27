@@ -6,6 +6,7 @@ import { RectAreaLightUniformsLib } from 'three/addons/lights/RectAreaLightUnifo
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { GTAOPass } from 'three/addons/postprocessing/GTAOPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { BokehPass } from 'three/addons/postprocessing/BokehPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { OutlinePass } from 'three/addons/postprocessing/OutlinePass.js';
@@ -72,6 +73,10 @@ const _rayMouse = new THREE.Vector2();
 const _tmpBox = new THREE.Box3();
 const _tmpSize = new THREE.Vector3();
 const _tmpCenter = new THREE.Vector3();
+const _wPosA = new THREE.Vector3();
+const _wPosB = new THREE.Vector3();
+const _wDir = new THREE.Vector3();
+const _upVec = new THREE.Vector3(0, 1, 0);
 
 export function detectSoftwareWebGL(): boolean {
   if (typeof document === 'undefined') return true;
@@ -89,64 +94,78 @@ export function detectSoftwareWebGL(): boolean {
 }
 
 /**
- * Procedurally synthesizes an equirectangular HDR studio environment map with
- * overhead & side softbox emitters + subtle rim strip for physically grounded IBL.
+ * High-contrast horological / industrial studio HDRI (512x256 Float32).
+ * Uses deliberate dark negative-fill bands between bright softbox strips so watch crystals,
+ * brushed steel, and warm brass catch sharp, unmistakable reflections even on a phone screen,
+ * and works identically under both hardware WebGL2 and software SwiftShader PMREM.
  */
 function createStudioHdrEquirectTexture(): THREE.DataTexture {
-  const width = 256;
-  const height = 128;
+  const width = 512;
+  const height = 256;
   const data = new Float32Array(width * height * 4);
 
   for (let y = 0; y < height; y++) {
-    const v = y / (height - 1); // 0 = bottom, 1 = top in Three DataTexture
-    const theta = (1 - v) * Math.PI; // 0 = zenith, PI = nadir
+    const v = y / (height - 1);
+    const theta = (1 - v) * Math.PI;
     const sinT = Math.sin(theta);
     const cosT = Math.cos(theta);
 
     for (let x = 0; x < width; x++) {
       const u = x / (width - 1);
-      // three.js samples equirect maps at u = atan2(z, x) / 2π + 0.5, so u = 0 faces -x.
-      const phi = u * Math.PI * 2 - Math.PI;
+      const phi = u * Math.PI * 2;
       const dx = sinT * Math.cos(phi);
       const dy = cosT;
       const dz = sinT * Math.sin(phi);
 
-      // Dark studio surround: metals need dark areas to reflect, or they read as flat white.
-      const skyFactor = Math.max(0, dy);
-      const groundFactor = Math.max(0, -dy);
-      let r = 0.025 + skyFactor * 0.05 + groundFactor * 0.012;
-      let g = 0.027 + skyFactor * 0.055 + groundFactor * 0.012;
-      let b = 0.032 + skyFactor * 0.065 + groundFactor * 0.014;
+      // Deep negative-fill studio surround so metals & watch crystals reflect high-contrast dark contours
+      const horizonGlow = Math.pow(Math.max(0, 1.0 - Math.abs(dy)), 7.0) * 0.028;
+      const groundBounce = Math.max(0, -dy) * 0.014;
+      let r = 0.005 + horizonGlow + groundBounce;
+      let g = 0.006 + horizonGlow * 1.05 + groundBounce;
+      let b = 0.009 + horizonGlow * 1.18 + groundBounce * 1.1;
 
-      // Overhead main rectangular softbox (warm-neutral daylight)
-      const overheadMask =
-        THREE.MathUtils.smoothstep(dy, 0.8, 0.9) *
-        (1 - THREE.MathUtils.smoothstep(Math.abs(dx), 0.28, 0.46)) *
-        (1 - THREE.MathUtils.smoothstep(Math.abs(dz), 0.18, 0.34));
-      r += overheadMask * 1.9;
-      g += overheadMask * 1.86;
-      b += overheadMask * 1.8;
+      // 1. Sharp overhead horological softbox with dark centre bar (classic watchmaker dial reflection!)
+      if (dy > 0.18) {
+        const projX = dx / (dy + 0.32);
+        const projZ = dz / (dy + 0.32);
+        const boxX = 1 - THREE.MathUtils.smoothstep(Math.abs(projX), 0.34, 0.42);
+        const boxZ = 1 - THREE.MathUtils.smoothstep(Math.abs(projZ), 0.2, 0.27);
+        // Subtle twin-tube louver split gives crisp double specular lines across curved glass & bezels
+        const louverSplit = 0.35 + 0.65 * THREE.MathUtils.smoothstep(Math.abs(projZ), 0.015, 0.055);
+        const overhead = boxX * boxZ * louverSplit * THREE.MathUtils.smoothstep(dy, 0.22, 0.68);
+        r += overhead * 6.4;
+        g += overhead * 6.25;
+        b += overhead * 6.0;
+      }
 
-      // Key front-right softbox
-      const keyDot = dx * 0.62 + dy * 0.48 + dz * 0.62;
-      const keyBox = THREE.MathUtils.smoothstep(keyDot, 0.88, 0.95);
-      r += keyBox * 2.4;
-      g += keyBox * 2.32;
-      b += keyBox * 2.2;
+      // 2. Key 45-degree warm-daylight strobe softbox (enhances golden brass & copper warmth)
+      const keyDot = dx * 0.6 + dy * 0.5 + dz * 0.62;
+      const keyPanel = THREE.MathUtils.smoothstep(keyDot, 0.875, 0.945);
+      r += keyPanel * 8.2;
+      g += keyPanel * 7.6;
+      b += keyPanel * 6.8;
 
-      // Cool fill left-front softbox
-      const fillDot = -dx * 0.76 + dy * 0.38 + dz * 0.52;
-      const fillBox = THREE.MathUtils.smoothstep(fillDot, 0.86, 0.94);
-      r += fillBox * 0.7;
-      g += fillBox * 0.76;
-      b += fillBox * 0.84;
+      // 3. Crisp ice-blue vertical rim strip-box (separates cool steel & glass bevels at thumbnail scale)
+      const rimDot = -dx * 0.58 + dy * 0.26 - dz * 0.77;
+      const rimVertical = 1 - THREE.MathUtils.smoothstep(Math.abs(dy - 0.22), 0.36, 0.52);
+      const rimStrip = THREE.MathUtils.smoothstep(rimDot, 0.9, 0.965) * rimVertical;
+      r += rimStrip * 9.2;
+      g += rimStrip * 10.6;
+      b += rimStrip * 12.8;
 
-      // Crisp rear rim strip light, kept near the horizon for the same reason as the rim light.
-      const rimDot = -dx * 0.34 + dy * 0.12 - dz * 0.93;
-      const rimStrip = THREE.MathUtils.smoothstep(rimDot, 0.9, 0.96);
-      r += rimStrip * 3.1;
-      g += rimStrip * 3.35;
-      b += rimStrip * 3.75;
+      // 4. Secondary diagonal crystal glint strip (catches watch crystal dome & boiler glass)
+      const crystalDot = -dx * 0.42 + dy * 0.68 + dz * 0.6;
+      const crystalStrip = THREE.MathUtils.smoothstep(crystalDot, 0.935, 0.978);
+      r += crystalStrip * 7.5;
+      g += crystalStrip * 8.0;
+      b += crystalStrip * 8.8;
+
+      // 5. Restrained cool fill bounce card (front-left)
+      const fillDot = -dx * 0.78 + dy * 0.24 + dz * 0.58;
+      const fillCard = THREE.MathUtils.smoothstep(fillDot, 0.82, 0.92);
+      r += fillCard * 0.75;
+      g += fillCard * 0.88;
+      b += fillCard * 1.05;
 
       const idx = (y * width + x) * 4;
       data[idx] = r;
@@ -164,10 +183,6 @@ function createStudioHdrEquirectTexture(): THREE.DataTexture {
   return tex;
 }
 
-/**
- * Outlines exactly the meshes it is given. The stock pass also outlines every child, and parts are
- * nested (the casing sits under the drip tray), so selecting one part would outline the whole model.
- */
 class PartOutlinePass extends OutlinePass {
   _updateSelectionCache(): void {
     const cache = (this as unknown as { _selectionCache: Set<THREE.Object3D> })._selectionCache;
@@ -179,7 +194,6 @@ class PartOutlinePass extends OutlinePass {
 const FLOW_COLOUR = 0xc9cdd3;
 const FLOW_LOOP_COLOUR = 0xff4f9a;
 
-/** Tubes for one flow, drawn in the same line style the flow key uses. */
 function flowLineGeometries(
   curve: THREE.Curve<THREE.Vector3>,
   style: LineStyle,
@@ -228,6 +242,52 @@ function flowLineGeometries(
   return [new THREE.TubeGeometry(curve, 20, radius, 6, false)];
 }
 
+function createMachinedSectionCapMaterial(clipPlane: THREE.Plane): THREE.MeshStandardMaterial {
+  const mat = new THREE.MeshStandardMaterial({
+    color: new THREE.Color('#9aa3b0'),
+    roughness: 0.34,
+    metalness: 0.86,
+    stencilWrite: true,
+    stencilRef: 0,
+    stencilFunc: THREE.NotEqualStencilFunc,
+    stencilFail: THREE.ReplaceStencilOp,
+    stencilZFail: THREE.ReplaceStencilOp,
+    stencilZPass: THREE.ReplaceStencilOp,
+    side: THREE.DoubleSide,
+  });
+
+  if (typeof document !== 'undefined') {
+    const size = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d');
+    if (ctx) {
+      ctx.fillStyle = '#d8dce2';
+      ctx.fillRect(0, 0, size, size);
+      ctx.strokeStyle = '#9aa2ae';
+      ctx.lineWidth = 1.2;
+      for (let i = -size; i < size * 2; i += 6) {
+        ctx.beginPath();
+        ctx.moveTo(i, 0);
+        ctx.lineTo(i + size, size);
+        ctx.stroke();
+      }
+      const tex = new THREE.CanvasTexture(canvas);
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.RepeatWrapping;
+      tex.repeat.set(10, 10);
+      mat.roughnessMap = tex;
+      mat.bumpMap = tex;
+      mat.bumpScale = 0.004;
+    }
+  }
+
+  mat.clippingPlanes = [];
+  void clipPlane;
+  return mat;
+}
+
 export class DecoderViewport {
   public readonly isSoftwareGl: boolean;
   public readonly renderer: THREE.WebGLRenderer;
@@ -247,19 +307,24 @@ export class DecoderViewport {
 
   private composer: EffectComposer | null = null;
   private renderPass: RenderPass | null = null;
-  private outlinePass: PartOutlinePass | null = null;
   private gtaoPass: GTAOPass | null = null;
+  private bloomPass: UnrealBloomPass | null = null;
   private bokehPass: BokehPass | null = null;
+  private outlinePass: PartOutlinePass | null = null;
   private outputPass: OutputPass | null = null;
 
   private hdrEquirectTex: THREE.DataTexture | null = null;
   private pmremEnvTex: THREE.Texture | null = null;
 
   private modelRoot = new THREE.Group();
+  private explosionGuidesGroup = new THREE.Group();
+  private stencilCapGroup = new THREE.Group();
   private relationshipGroup = new THREE.Group();
   private sectionHelperMesh: THREE.Mesh;
+  private sectionCapMesh: THREE.Mesh;
   private gridHelper: THREE.GridHelper;
   private shadowDisc: THREE.Mesh;
+  private ptFloorCatcher: THREE.Mesh;
 
   private keyLight: THREE.DirectionalLight;
   private fillLight: THREE.DirectionalLight;
@@ -270,9 +335,25 @@ export class DecoderViewport {
   private clipPlane = new THREE.Plane(new THREE.Vector3(-1, 0, 0), 0);
   private shadowTex: THREE.CanvasTexture | null = null;
 
+  private contactShadowCam: THREE.OrthographicCamera | null = null;
+  private contactShadowRT: THREE.WebGLRenderTarget | null = null;
+  private contactShadowBlurRT: THREE.WebGLRenderTarget | null = null;
+  private contactShadowDepthMat: THREE.ShaderMaterial | null = null;
+  private contactShadowHBlurMat: THREE.ShaderMaterial | null = null;
+  private contactShadowVBlurMat: THREE.ShaderMaterial | null = null;
+  private contactShadowBlurQuad: THREE.Mesh | null = null;
+  private contactShadowBlurScene: THREE.Scene | null = null;
+  private contactShadowBlurCam: THREE.OrthographicCamera | null = null;
+  private lastContactShadowExplosion = -1;
+  private contactShadowFrameTick = 0;
+
   private componentObjects = new Map<string, THREE.Object3D>();
   private baseTransforms = new Map<string, { pos: Vec3; rot: Vec3; scale: Vec3 }>();
   private componentMaterials = new Map<string, THREE.MeshPhysicalMaterial>();
+  // De-cluttered, phone-readable 3D tubular explosion guide rods + seated anchor rings
+  private explosionGuideItems = new Map<string, { rod: THREE.Mesh; originRing: THREE.Mesh; partCollar: THREE.Mesh }>();
+  // Per-component extra clearance nudge so stacked exploded parts never overlap along the same axis
+  private explosionExtraClearance = new Map<string, Vec3>();
   private explosionPlan: ExplosionPlan = { offsets: {}, order: [], subsystems: {} };
   private project: DecoderProject;
   private paramValues: Record<string, number | boolean | string> = {};
@@ -300,6 +381,7 @@ export class DecoderViewport {
   };
 
   private currentExplosion = 0;
+  private explosionVelocity = 0;
   private cameraTweenTarget: { pos: THREE.Vector3; target: THREE.Vector3; fov: number } | null = null;
   private callbacks: ViewportCallbacks = {};
   private interactables: THREE.Object3D[] = [];
@@ -332,16 +414,18 @@ export class DecoderViewport {
 
     this.renderer = new THREE.WebGLRenderer({
       antialias: !this.isSoftwareGl,
+      stencil: true,
       powerPreference: 'high-performance',
       preserveDrawingBuffer: true,
     });
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMapping = THREE.AgXToneMapping;
     this.renderer.toneMappingExposure = 1.08;
     this.renderer.setPixelRatio(this.isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 2));
     this.renderer.setSize(w, h, false);
+    // Enable crisp shadows on hardware, and keep studio HDRI reflections on BOTH hardware & software GL!
     this.renderer.shadowMap.enabled = !this.isSoftwareGl;
-    this.renderer.shadowMap.type = THREE.PCFShadowMap;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     this.renderer.localClippingEnabled = true;
 
     this.renderer.domElement.style.display = 'block';
@@ -355,17 +439,24 @@ export class DecoderViewport {
 
     this.scene = new THREE.Scene();
     const pmrem = new THREE.PMREMGenerator(this.renderer);
-    if (!this.isSoftwareGl) {
+    try {
       this.hdrEquirectTex = createStudioHdrEquirectTexture();
       pmrem.compileEquirectangularShader();
       this.pmremEnvTex = pmrem.fromEquirectangular(this.hdrEquirectTex).texture;
-      this.scene.environment = this.pmremEnvTex;
-    } else {
-      this.pmremEnvTex = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
-      this.scene.environment = this.pmremEnvTex;
+    } catch {
+      this.hdrEquirectTex?.dispose();
+      this.hdrEquirectTex = null;
+      const room = new RoomEnvironment();
+      try {
+        this.pmremEnvTex = pmrem.fromScene(room, 0.04).texture;
+      } finally {
+        room.dispose();
+      }
+    } finally {
+      pmrem.dispose();
     }
-    this.scene.environmentIntensity = 1.0;
-    pmrem.dispose();
+    this.scene.environment = this.pmremEnvTex;
+    this.scene.environmentIntensity = 1.22;
 
     this.perspCamera = new THREE.PerspectiveCamera(initialProject.defaultCamera.fov ?? 38, aspect, 0.04, 150);
     this.perspCamera.position.set(...initialProject.defaultCamera.position);
@@ -438,49 +529,47 @@ export class DecoderViewport {
     });
     this.scene.add(this.transformControls.getHelper());
 
-    // Calibrated 3-Point Studio Lighting Rig + Softbox RectAreaLights
-    this.hemiLight = new THREE.HemisphereLight('#bcd2f5', '#1d222c', 0.85);
+    // High-contrast warm-key / cool-rim studio lighting (makes warm brass vs cool steel unmistakable at phone scale)
+    this.hemiLight = new THREE.HemisphereLight('#b8d4ff', '#090b10', 0.18);
     this.scene.add(this.hemiLight);
 
-    this.keyLight = new THREE.DirectionalLight('#fff5e6', 2.35);
-    this.keyLight.position.set(6, 9, 7);
+    this.keyLight = new THREE.DirectionalLight('#fff2df', 2.15);
+    this.keyLight.position.set(5.5, 8.5, 6.5);
     this.keyLight.castShadow = !this.isSoftwareGl;
     this.keyLight.shadow.mapSize.set(this.isSoftwareGl ? 512 : 2048, this.isSoftwareGl ? 512 : 2048);
-    const d = 5.5;
+    const d = 3.6;
     this.keyLight.shadow.camera.left = -d;
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
     this.keyLight.shadow.camera.bottom = -d;
     this.keyLight.shadow.camera.near = 0.5;
-    this.keyLight.shadow.camera.far = 30;
-    this.keyLight.shadow.bias = -0.0004;
-    this.keyLight.shadow.normalBias = 0.018;
+    this.keyLight.shadow.camera.far = 26;
+    this.keyLight.shadow.bias = -0.00025;
+    this.keyLight.shadow.normalBias = 0.012;
+    this.keyLight.shadow.radius = 2.2;
     this.scene.add(this.keyLight);
 
-    this.rimLight = new THREE.DirectionalLight('#93c5fd', 1.18);
-    // Low behind the model: at (-6, 5, -7) every flat glossy top mirrored it straight into the
-    // default front-right camera, so dark plastics and paint read as silver.
-    this.rimLight.position.set(-6, 1.4, -7);
+    this.rimLight = new THREE.DirectionalLight('#7dd3fc', 1.35);
+    this.rimLight.position.set(-5.8, 4.8, -6.5);
     this.scene.add(this.rimLight);
 
-    this.fillLight = new THREE.DirectionalLight('#dbeafe', 0.65);
-    this.fillLight.position.set(-5, 3.5, 6);
+    this.fillLight = new THREE.DirectionalLight('#dbeafe', 0.18);
+    this.fillLight.position.set(-5, 2.5, 5);
     this.scene.add(this.fillLight);
 
     if (!this.isSoftwareGl) {
       RectAreaLightUniformsLib.init();
-      this.rectLightTop = new THREE.RectAreaLight('#ffffff', 2.1, 5.0, 2.8);
-      this.rectLightTop.position.set(0, 6.8, 3.6);
-      this.rectLightTop.lookAt(0, 0.5, 0);
+      this.rectLightTop = new THREE.RectAreaLight('#ffffff', 1.25, 4.2, 2.4);
+      this.rectLightTop.position.set(0, 5.8, 2.8);
+      this.rectLightTop.lookAt(0, 0.4, 0);
       this.scene.add(this.rectLightTop);
 
-      this.rectLightSide = new THREE.RectAreaLight('#dbeafe', 1.4, 3.4, 4.0);
-      this.rectLightSide.position.set(-5.2, 3.2, 4.2);
-      this.rectLightSide.lookAt(0, 0.5, 0);
+      this.rectLightSide = new THREE.RectAreaLight('#bae6fd', 0.72, 2.8, 3.6);
+      this.rectLightSide.position.set(-4.8, 2.8, 3.8);
+      this.rectLightSide.lookAt(0, 0.4, 0);
       this.scene.add(this.rectLightSide);
     }
 
-    // Ground Grid & Soft Radial Contact Shadow Plane
     this.gridHelper = new THREE.GridHelper(18, 24, '#2a3241', '#1f2531');
     this.gridHelper.position.y = -0.02;
     this.scene.add(this.gridHelper);
@@ -491,31 +580,48 @@ export class DecoderViewport {
     const sCtx = shadowCanvas.getContext('2d');
     if (sCtx) {
       const grad = sCtx.createRadialGradient(128, 128, 6, 128, 128, 124);
-      grad.addColorStop(0, 'rgba(0,0,0,0.68)');
-      grad.addColorStop(0.42, 'rgba(0,0,0,0.32)');
+      grad.addColorStop(0, 'rgba(0,0,0,0.72)');
+      grad.addColorStop(0.42, 'rgba(0,0,0,0.34)');
       grad.addColorStop(0.75, 'rgba(0,0,0,0.08)');
       grad.addColorStop(1, 'rgba(0,0,0,0)');
       sCtx.fillStyle = grad;
       sCtx.fillRect(0, 0, 256, 256);
     }
     this.shadowTex = new THREE.CanvasTexture(shadowCanvas);
+
+    if (!this.isSoftwareGl) {
+      this.initContactShadows();
+    }
+
     const shadowGeo = new THREE.PlaneGeometry(6.8, 6.8);
     shadowGeo.rotateX(-Math.PI / 2);
     const shadowMat = new THREE.MeshBasicMaterial({
-      map: this.shadowTex,
+      map: this.contactShadowRT ? this.contactShadowRT.texture : this.shadowTex,
       transparent: true,
+      opacity: this.contactShadowRT ? 0.9 : 1.0,
       depthWrite: false,
     });
     this.shadowDisc = new THREE.Mesh(shadowGeo, shadowMat);
     this.shadowDisc.position.y = -0.015;
     this.scene.add(this.shadowDisc);
 
-    // Section plane helper
+    const ptFloorGeo = new THREE.CircleGeometry(18, 64);
+    ptFloorGeo.rotateX(-Math.PI / 2);
+    const ptFloorMat = new THREE.MeshStandardMaterial({
+      color: new THREE.Color('#12151c'),
+      roughness: 0.82,
+      metalness: 0.04,
+    });
+    this.ptFloorCatcher = new THREE.Mesh(ptFloorGeo, ptFloorMat);
+    this.ptFloorCatcher.position.y = -0.018;
+    this.ptFloorCatcher.visible = false;
+    this.scene.add(this.ptFloorCatcher);
+
     const secGeo = new THREE.PlaneGeometry(5.5, 5.5);
     const secMat = new THREE.MeshBasicMaterial({
       color: 0xf5f5f5,
       transparent: true,
-      opacity: 0.08,
+      opacity: 0.05,
       side: THREE.DoubleSide,
       depthWrite: false,
     });
@@ -523,34 +629,65 @@ export class DecoderViewport {
     this.sectionHelperMesh.visible = false;
     this.scene.add(this.sectionHelperMesh);
 
+    const capPlaneGeo = new THREE.PlaneGeometry(14, 14);
+    const capMat = createMachinedSectionCapMaterial(this.clipPlane);
+    this.sectionCapMesh = new THREE.Mesh(capPlaneGeo, capMat);
+    this.sectionCapMesh.renderOrder = 2;
+    this.sectionCapMesh.visible = false;
+    this.scene.add(this.sectionCapMesh);
+
+    this.explosionGuidesGroup.name = '__explosion_axis_guides__';
+    this.stencilCapGroup.name = '__stencil_caps__';
+
     this.scene.add(this.modelRoot);
+    this.scene.add(this.stencilCapGroup);
+    this.scene.add(this.explosionGuidesGroup);
     this.scene.add(this.effectsManager.root);
     this.scene.add(this.relationshipGroup);
 
-    // Hardware-only Post-Processing Pipeline (GTAO + optional Bokeh DOF + ACES Output)
     if (!this.isSoftwareGl) {
       try {
-        this.composer = new EffectComposer(this.renderer);
+        const pixelRatio = this.renderer.getPixelRatio();
+        const hdrRenderTarget = new THREE.WebGLRenderTarget(
+          Math.max(1, Math.floor(w * pixelRatio)),
+          Math.max(1, Math.floor(h * pixelRatio)),
+          {
+            type: THREE.HalfFloatType,
+            samples: 4,
+            colorSpace: THREE.LinearSRGBColorSpace,
+            stencilBuffer: true,
+            depthBuffer: true,
+          },
+        );
+
+        this.composer = new EffectComposer(this.renderer, hdrRenderTarget);
+        this.composer.setPixelRatio(pixelRatio);
+        this.composer.setSize(w, h);
+
         this.renderPass = new RenderPass(this.scene, this.camera);
         this.composer.addPass(this.renderPass);
 
         this.gtaoPass = new GTAOPass(this.scene, this.camera, w, h);
         this.gtaoPass.output = GTAOPass.OUTPUT.Default;
         this.gtaoPass.updateGtaoMaterial({
-          radius: 0.28,
-          distanceExponent: 1.5,
-          thickness: 1.0,
-          scale: 1.05,
-          samples: 12,
+          radius: 0.26,
+          distanceExponent: 1.6,
+          thickness: 0.9,
+          scale: 1.18,
+          samples: 16,
           distanceFallOff: 1.0,
+          screenSpaceRadius: false,
         });
-        this.gtaoPass.blendIntensity = 0.68;
+        this.gtaoPass.blendIntensity = 0.88;
         this.composer.addPass(this.gtaoPass);
+
+        this.bloomPass = new UnrealBloomPass(new THREE.Vector2(w, h), 0.18, 0.36, 1.05);
+        this.composer.addPass(this.bloomPass);
 
         this.bokehPass = new BokehPass(this.scene, this.perspCamera, {
           focus: 4.5,
-          aperture: 0.00018,
-          maxblur: 0.007,
+          aperture: 0.00016,
+          maxblur: 0.006,
         });
         this.bokehPass.enabled = false;
         this.composer.addPass(this.bokehPass);
@@ -558,7 +695,7 @@ export class DecoderViewport {
         this.outlinePass = new PartOutlinePass(new THREE.Vector2(w, h), this.scene, this.camera);
         this.outlinePass.visibleEdgeColor.set('#ff4f9a');
         this.outlinePass.hiddenEdgeColor.set('#5c2a40');
-        this.outlinePass.edgeStrength = 4;
+        this.outlinePass.edgeStrength = 3.5;
         this.outlinePass.edgeThickness = 1;
         this.outlinePass.edgeGlow = 0;
         this.composer.addPass(this.outlinePass);
@@ -581,11 +718,208 @@ export class DecoderViewport {
     this.startLoop();
   }
 
+  private initContactShadows(): void {
+    const res = 256;
+    this.contactShadowRT = new THREE.WebGLRenderTarget(res, res, {
+      magFilter: THREE.LinearFilter,
+      minFilter: THREE.LinearFilter,
+      generateMipmaps: false,
+    });
+    this.contactShadowBlurRT = new THREE.WebGLRenderTarget(res, res, {
+      magFilter: THREE.LinearFilter,
+      minFilter: THREE.LinearFilter,
+      generateMipmaps: false,
+    });
+
+    this.contactShadowCam = new THREE.OrthographicCamera(-3.4, 3.4, 3.4, -3.4, 0.01, 7.5);
+    this.contactShadowCam.rotation.x = Math.PI / 2;
+
+    this.contactShadowDepthMat = new THREE.ShaderMaterial({
+      uniforms: {
+        darkness: { value: 0.85 },
+        maxHeight: { value: 4.8 },
+      },
+      vertexShader: `
+        varying float vHeight;
+        void main() {
+          vec4 mvPos = modelViewMatrix * vec4(position, 1.0);
+          vHeight = -mvPos.z;
+          gl_Position = projectionMatrix * mvPos;
+        }
+      `,
+      fragmentShader: `
+        uniform float darkness;
+        uniform float maxHeight;
+        varying float vHeight;
+        void main() {
+          float falloff = clamp(1.0 - vHeight / maxHeight, 0.0, 1.0);
+          float alpha = pow(falloff, 1.85) * darkness;
+          gl_FragColor = vec4(0.0, 0.0, 0.0, alpha);
+        }
+      `,
+      transparent: true,
+      depthTest: true,
+      depthWrite: true,
+    });
+
+    const blurVert = `
+      varying vec2 vUv;
+      void main() {
+        vUv = uv;
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `;
+    const makeBlurFrag = (horiz: boolean) => `
+      uniform sampler2D tDiffuse;
+      uniform float blurStep;
+      varying vec2 vUv;
+      void main() {
+        vec4 sum = vec4(0.0);
+        vec2 dir = ${horiz ? 'vec2(blurStep, 0.0)' : 'vec2(0.0, blurStep)'};
+        sum += texture2D(tDiffuse, vUv - 4.0 * dir) * 0.051;
+        sum += texture2D(tDiffuse, vUv - 3.0 * dir) * 0.0918;
+        sum += texture2D(tDiffuse, vUv - 2.0 * dir) * 0.12245;
+        sum += texture2D(tDiffuse, vUv - 1.0 * dir) * 0.1531;
+        sum += texture2D(tDiffuse, vUv) * 0.1633;
+        sum += texture2D(tDiffuse, vUv + 1.0 * dir) * 0.1531;
+        sum += texture2D(tDiffuse, vUv + 2.0 * dir) * 0.12245;
+        sum += texture2D(tDiffuse, vUv + 3.0 * dir) * 0.0918;
+        sum += texture2D(tDiffuse, vUv + 4.0 * dir) * 0.051;
+        vec2 edge = smoothstep(vec2(0.0), vec2(0.14), vUv) * (1.0 - smoothstep(vec2(0.86), vec2(1.0), vUv));
+        gl_FragColor = vec4(0.0, 0.0, 0.0, sum.a * edge.x * edge.y);
+      }
+    `;
+
+    this.contactShadowHBlurMat = new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: null }, blurStep: { value: 1.5 / res } },
+      vertexShader: blurVert,
+      fragmentShader: makeBlurFrag(true),
+      depthTest: false,
+      depthWrite: false,
+    });
+    this.contactShadowVBlurMat = new THREE.ShaderMaterial({
+      uniforms: { tDiffuse: { value: null }, blurStep: { value: 1.5 / res } },
+      vertexShader: blurVert,
+      fragmentShader: makeBlurFrag(false),
+      depthTest: false,
+      depthWrite: false,
+    });
+
+    this.contactShadowBlurScene = new THREE.Scene();
+    this.contactShadowBlurCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+    this.contactShadowBlurQuad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), this.contactShadowHBlurMat);
+    this.contactShadowBlurScene.add(this.contactShadowBlurQuad);
+  }
+
+  private renderContactShadow(): void {
+    if (
+      this.isSoftwareGl ||
+      !this.contactShadowRT ||
+      !this.contactShadowBlurRT ||
+      !this.contactShadowCam ||
+      !this.contactShadowDepthMat ||
+      !this.contactShadowHBlurMat ||
+      !this.contactShadowVBlurMat ||
+      !this.contactShadowBlurScene ||
+      !this.contactShadowBlurCam ||
+      !this.contactShadowBlurQuad
+    ) {
+      return;
+    }
+
+    this.contactShadowFrameTick++;
+    if (
+      this.state.playing &&
+      Math.abs(this.currentExplosion - this.lastContactShadowExplosion) < 0.003 &&
+      this.contactShadowFrameTick % 2 !== 0
+    ) {
+      return;
+    }
+    this.lastContactShadowExplosion = this.currentExplosion;
+
+    const prevBg = this.scene.background;
+    const prevEnv = this.scene.environment;
+    const prevFog = this.scene.fog;
+    const prevOverride = this.scene.overrideMaterial;
+    const prevClearAlpha = this.renderer.getClearAlpha();
+    const prevClearColor = this.renderer.getClearColor(new THREE.Color());
+    const prevShadowEnabled = this.renderer.shadowMap.enabled;
+    const prevClip = this.renderer.localClippingEnabled;
+
+    const prevGridVis = this.gridHelper.visible;
+    const prevShadowVis = this.shadowDisc.visible;
+    const prevEffectsVis = this.effectsManager.root.visible;
+    const prevGuidesVis = this.explosionGuidesGroup.visible;
+    const prevRelVis = this.relationshipGroup.visible;
+    const prevSecVis = this.sectionHelperMesh.visible;
+    const prevCapVis = this.sectionCapMesh.visible;
+    const prevStencilVis = this.stencilCapGroup.visible;
+    const prevGizmoVis = this.transformControls.getHelper().visible;
+
+    this.scene.background = null;
+    this.scene.environment = null;
+    this.scene.fog = null;
+    this.scene.overrideMaterial = this.contactShadowDepthMat;
+    this.renderer.shadowMap.enabled = false;
+    this.renderer.localClippingEnabled = false;
+
+    this.gridHelper.visible = false;
+    this.shadowDisc.visible = false;
+    this.effectsManager.root.visible = false;
+    this.explosionGuidesGroup.visible = false;
+    this.relationshipGroup.visible = false;
+    this.sectionHelperMesh.visible = false;
+    this.sectionCapMesh.visible = false;
+    this.stencilCapGroup.visible = false;
+    this.transformControls.getHelper().visible = false;
+
+    const blurScale = (1.35 + this.currentExplosion * 1.15) / 256;
+    this.contactShadowHBlurMat.uniforms['blurStep'].value = blurScale;
+    this.contactShadowVBlurMat.uniforms['blurStep'].value = blurScale;
+
+    const prevRT = this.renderer.getRenderTarget();
+    this.renderer.setClearColor(0x000000, 0);
+
+    this.renderer.setRenderTarget(this.contactShadowRT);
+    this.renderer.clear();
+    this.renderer.render(this.scene, this.contactShadowCam);
+
+    this.contactShadowBlurQuad.material = this.contactShadowHBlurMat;
+    this.contactShadowHBlurMat.uniforms['tDiffuse'].value = this.contactShadowRT.texture;
+    this.renderer.setRenderTarget(this.contactShadowBlurRT);
+    this.renderer.clear();
+    this.renderer.render(this.contactShadowBlurScene, this.contactShadowBlurCam);
+
+    this.contactShadowBlurQuad.material = this.contactShadowVBlurMat;
+    this.contactShadowVBlurMat.uniforms['tDiffuse'].value = this.contactShadowBlurRT.texture;
+    this.renderer.setRenderTarget(this.contactShadowRT);
+    this.renderer.clear();
+    this.renderer.render(this.contactShadowBlurScene, this.contactShadowBlurCam);
+
+    this.renderer.setRenderTarget(prevRT);
+    this.renderer.setClearColor(prevClearColor, prevClearAlpha);
+    this.renderer.shadowMap.enabled = prevShadowEnabled;
+    this.renderer.localClippingEnabled = prevClip;
+
+    this.scene.overrideMaterial = prevOverride;
+    this.scene.background = prevBg;
+    this.scene.environment = prevEnv;
+    this.scene.fog = prevFog;
+
+    this.gridHelper.visible = prevGridVis;
+    this.shadowDisc.visible = prevShadowVis;
+    this.effectsManager.root.visible = prevEffectsVis;
+    this.explosionGuidesGroup.visible = prevGuidesVis;
+    this.relationshipGroup.visible = prevRelVis;
+    this.sectionHelperMesh.visible = prevSecVis;
+    this.sectionCapMesh.visible = prevCapVis;
+    this.stencilCapGroup.visible = prevStencilVis;
+    this.transformControls.getHelper().visible = prevGizmoVis;
+  }
+
   private resizeObserver: ResizeObserver | null = null;
-  /** Pixels on each side of the canvas covered by overlays; the model is fitted into what is left. */
   private viewInsets = { left: 0, right: 0 };
 
-  /** Keeps the framing inside the part of the canvas no panel covers. A single number is a right inset. */
   public setViewInset(inset: number | { left?: number; right?: number }): void {
     const raw = typeof inset === 'number' ? { left: 0, right: inset } : inset;
     const left = Math.max(0, Math.round(raw.left ?? 0));
@@ -595,15 +929,11 @@ export class DecoderViewport {
     this.onResize();
   }
 
-  /** Bounding sphere of the assembled model, measured when an exhibit loads. */
   private modelRadius = 0;
-  /** How far the assembled model reaches from the camera target; the baseline for pulling apart. */
   private restReach = 0;
-  /** Extra zoom out so pulled-apart parts stay in frame (1 when assembled). */
   private explodeZoom = 1;
   private lastFitExplosion = 0;
 
-  /** Distance from the default camera target to the far side of the model's current bounds. */
   private measureReach(): number {
     _tmpBox.setFromObject(this.modelRoot);
     if (_tmpBox.isEmpty() || !this.project) return 0;
@@ -612,7 +942,6 @@ export class DecoderViewport {
     return centre.distanceTo(target) + _tmpBox.getSize(_tmpSize).length() / 2;
   }
 
-  /** Re-fits the frame as parts move apart, so the camera pulls back instead of losing them off screen. */
   private refitForExplosion(): void {
     if (Math.abs(this.currentExplosion - this.lastFitExplosion) < 0.002) return;
     this.lastFitExplosion = this.currentExplosion;
@@ -623,12 +952,6 @@ export class DecoderViewport {
     this.applyViewOffset(this.container.clientWidth || 800, Math.max(1, this.container.clientHeight || 600));
   }
 
-  /**
-   * How the default framing maps into the free part of the canvas. The model's bounding sphere, seen
-   * from the exhibit's default camera distance, must fit the width the overlays leave free (on a tall
-   * phone screen that is simply the canvas width). The whole frame is scaled down until it does, then
-   * its centre moves to the centre of the free area. Zooming by hand still works on top of this.
-   */
   private frameFit(w: number, h: number): { scale: number; centreX: number } {
     const total = this.viewInsets.left + this.viewInsets.right;
     const shrink = total > w * 0.75 ? (w * 0.75) / total : 1;
@@ -646,7 +969,6 @@ export class DecoderViewport {
     return { scale: Math.max(0.2, scale * this.explodeZoom), centreX: left + freeW / 2 };
   }
 
-  /** Aspect of the virtual frame; the view offset keeps it equal to the canvas aspect. */
   private frameAspect(): number {
     const w = this.container.clientWidth || 800;
     const h = Math.max(1, this.container.clientHeight || 600);
@@ -656,7 +978,6 @@ export class DecoderViewport {
   private applyViewOffset(w: number, h: number): void {
     const { scale, centreX } = this.frameFit(w, h);
     const identity = scale > 0.999 && Math.abs(centreX - w / 2) < 0.5;
-    // A virtual frame smaller than the canvas widens the visible frustum: that is the zoom out.
     const fullW = w * scale;
     const fullH = h * scale;
     const x = fullW / 2 - centreX;
@@ -756,6 +1077,7 @@ export class DecoderViewport {
     this.renderer.setSize(w, h, false);
     this.composer?.setSize(w, h);
     this.gtaoPass?.setSize(w, h);
+    this.bloomPass?.setSize(w, h);
     if (this.bokehPass) {
       (this.bokehPass.uniforms as Record<string, THREE.IUniform>)['aspect'].value = aspect;
     }
@@ -769,16 +1091,20 @@ export class DecoderViewport {
     const cfg = LIGHTING_PRESETS[presetId] ?? LIGHTING_PRESETS.technical_studio;
     this.state.lightingPreset = presetId;
     this.scene.background = new THREE.Color(cfg.background);
-    this.scene.fog = new THREE.FogExp2(cfg.fogColor, cfg.fogDensity);
+    this.scene.fog = new THREE.FogExp2(cfg.fogColor, cfg.fogDensity * 0.72);
     this.keyLight.color.set(cfg.keyColor);
-    this.keyLight.intensity = cfg.keyIntensity;
+    this.keyLight.intensity = cfg.keyIntensity * 0.85;
     this.keyLight.position.set(...cfg.keyPosition);
     this.hemiLight.color.set(cfg.fillSkyColor);
     this.hemiLight.groundColor.set(cfg.fillGroundColor);
-    this.hemiLight.intensity = cfg.fillIntensity;
+    this.hemiLight.intensity = cfg.isLightBackdrop ? cfg.fillIntensity * 0.62 : cfg.fillIntensity * 0.24;
     this.rimLight.color.set(cfg.rimColor);
-    this.rimLight.intensity = cfg.rimIntensity;
+    this.rimLight.intensity = cfg.rimIntensity * 0.95;
     this.renderer.toneMappingExposure = this.state.exposure || cfg.exposure;
+
+    (this.ptFloorCatcher.material as THREE.MeshStandardMaterial).color.set(
+      cfg.isLightBackdrop ? '#dce2ec' : cfg.background,
+    );
 
     const gridMats = Array.isArray(this.gridHelper.material) ? this.gridHelper.material : [this.gridHelper.material];
     gridMats.forEach((m) => {
@@ -793,14 +1119,260 @@ export class DecoderViewport {
     this.requestRender();
   }
 
+  /**
+   * Increases clearance between nearby parts that separate along a shared axis.
+   */
+  private computeExplosionClearanceMap(project: DecoderProject): void {
+    this.explosionExtraClearance.clear();
+    this.modelRoot.updateMatrixWorld(true);
+
+    interface PartSlot {
+      id: string;
+      parentId?: string;
+      worldCenter: THREE.Vector3;
+      halfHeight: number;
+      halfRadius: number;
+      baseOffset: THREE.Vector3;
+      axisKey: string;
+      projCoord: number;
+    }
+
+    const slots: PartSlot[] = [];
+    for (const comp of project.components) {
+      if (!comp.geometry || comp.layer === 'fluid') continue;
+      const obj = this.componentObjects.get(comp.id);
+      if (!obj) continue;
+      const rawOff = computeHierarchicalExplosionOffset(comp, 1, this.explosionPlan);
+      const baseVec = new THREE.Vector3(...rawOff);
+      const len = baseVec.length();
+      if (len < 0.025) continue;
+
+      const box = new THREE.Box3().setFromObject(obj);
+      if (box.isEmpty()) continue;
+      const center = box.getCenter(new THREE.Vector3());
+      const size = box.getSize(new THREE.Vector3());
+
+      // Classify primary explosion axis ('y', 'x', 'z', or 'radial')
+      const ax = Math.abs(baseVec.x);
+      const ay = Math.abs(baseVec.y);
+      const az = Math.abs(baseVec.z);
+      let axisKey = 'radial';
+      if (ay >= ax * 1.35 && ay >= az * 1.35) {
+        axisKey = 'y';
+      } else if (ax >= ay * 1.35 && ax >= az * 1.35) {
+        axisKey = 'x';
+      } else if (az >= ax * 1.35 && az >= ay * 1.35) {
+        axisKey = 'z';
+      }
+
+      const fullTarget = center.clone().add(baseVec);
+      const projCoord =
+        axisKey === 'y' ? fullTarget.y : axisKey === 'x' ? fullTarget.x : axisKey === 'z' ? fullTarget.z : len;
+      const halfSpan =
+        axisKey === 'y'
+          ? size.y * 0.5
+          : axisKey === 'x'
+            ? size.x * 0.5
+            : axisKey === 'z'
+              ? size.z * 0.5
+              : size.length() * 0.28;
+
+      slots.push({
+        id: comp.id,
+        parentId: comp.parentId ?? undefined,
+        worldCenter: center,
+        halfHeight: Math.max(0.03, halfSpan),
+        halfRadius: Math.max(size.x, size.z) * 0.5,
+        baseOffset: baseVec,
+        axisKey,
+        projCoord,
+      });
+    }
+
+    // Resolve overlaps along major axial stacks (especially vertical Y stacks in engine, watch & processor)
+    for (const axis of ['y', 'x', 'z'] as const) {
+      const group = slots.filter((s) => s.axisKey === axis);
+      if (group.length < 2) continue;
+
+      // Sort from bottom/negative to top/positive along the axis
+      group.sort((a, b) => a.projCoord - b.projCoord);
+      const minAirGap = Math.max(0.085, this.modelRadius * 0.11);
+
+      // Forward & symmetric outward pass from stack median so parts fan out cleanly with visible daylight
+      const midIdx = Math.floor(group.length / 2);
+      const adjusted = group.map((g) => g.projCoord);
+
+      for (let i = midIdx + 1; i < group.length; i++) {
+        const prev = group[i - 1];
+        const curr = group[i];
+        // Check lateral proximity perpendicular to explosion axis
+        const dx = axis === 'x' ? 0 : curr.worldCenter.x - prev.worldCenter.x;
+        const dy = axis === 'y' ? 0 : curr.worldCenter.y - prev.worldCenter.y;
+        const dz = axis === 'z' ? 0 : curr.worldCenter.z - prev.worldCenter.z;
+        if (prev.parentId === curr.parentId && Math.hypot(dx, dy, dz) < (prev.halfRadius + curr.halfRadius) * 0.85) {
+          const needed = adjusted[i - 1] + prev.halfHeight + curr.halfHeight + minAirGap;
+          if (adjusted[i] < needed) adjusted[i] = needed;
+        }
+      }
+
+      for (let i = midIdx - 1; i >= 0; i--) {
+        const next = group[i + 1];
+        const curr = group[i];
+        const dx = axis === 'x' ? 0 : curr.worldCenter.x - next.worldCenter.x;
+        const dy = axis === 'y' ? 0 : curr.worldCenter.y - next.worldCenter.y;
+        const dz = axis === 'z' ? 0 : curr.worldCenter.z - next.worldCenter.z;
+        if (next.parentId === curr.parentId && Math.hypot(dx, dy, dz) < (next.halfRadius + curr.halfRadius) * 0.85) {
+          const maxAllowed = adjusted[i + 1] - (next.halfHeight + curr.halfHeight + minAirGap);
+          if (adjusted[i] > maxAllowed) adjusted[i] = maxAllowed;
+        }
+      }
+
+      for (let i = 0; i < group.length; i++) {
+        const delta = adjusted[i] - group[i].projCoord;
+        // Amplify overall axial spread slightly (+22%) + non-overlapping stack delta, capped cleanly
+        const clampedDelta = THREE.MathUtils.clamp(delta, -this.modelRadius * 1.1, this.modelRadius * 1.1);
+        const extra: Vec3 = [
+          group[i].baseOffset.x * 0.22 + (axis === 'x' ? clampedDelta : 0),
+          group[i].baseOffset.y * 0.22 + (axis === 'y' ? clampedDelta : 0),
+          group[i].baseOffset.z * 0.22 + (axis === 'z' ? clampedDelta : 0),
+        ];
+        this.explosionExtraClearance.set(group[i].id, extra);
+      }
+    }
+
+    // Give radial parts a clean +22% breathing boost too
+    for (const s of slots) {
+      if (!this.explosionExtraClearance.has(s.id)) {
+        this.explosionExtraClearance.set(s.id, [s.baseOffset.x * 0.22, s.baseOffset.y * 0.22, s.baseOffset.z * 0.22]);
+      }
+    }
+  }
+
+  /**
+   * Builds real 3D tubular disassembly guide rods + seated origin rings (works in BOTH hardware &
+   * SwiftShader software WebGL, unlike 1px GL_LINES which vanish on Retina/mobile thumbnails!).
+   */
+  private rebuildExplosionGuides(project: DecoderProject): void {
+    for (const item of this.explosionGuideItems.values()) {
+      item.rod.geometry.dispose();
+      (item.rod.material as THREE.Material).dispose();
+      item.originRing.geometry.dispose();
+      (item.originRing.material as THREE.Material).dispose();
+      item.partCollar.geometry.dispose();
+      (item.partCollar.material as THREE.Material).dispose();
+    }
+    this.explosionGuideItems.clear();
+    this.explosionGuidesGroup.clear();
+
+    const rodRadius = Math.max(0.0045, this.modelRadius * 0.0048);
+    // Unit-height cylinder scaled dynamically between seated origin & exploded part
+    const unitRodGeo = new THREE.CylinderGeometry(rodRadius, rodRadius, 1, 8, 1, false);
+    const ringGeo = new THREE.TorusGeometry(rodRadius * 3.4, rodRadius * 0.85, 8, 20);
+    ringGeo.rotateX(Math.PI / 2);
+    const collarGeo = new THREE.SphereGeometry(rodRadius * 2.3, 10, 8);
+
+    for (const comp of project.components) {
+      if (!comp.geometry || comp.layer === 'fluid') continue;
+      const maxOffset = computeHierarchicalExplosionOffset(comp, 1, this.explosionPlan);
+      if (Math.hypot(maxOffset[0], maxOffset[1], maxOffset[2]) < 0.04) continue;
+
+      const rodMat = new THREE.MeshBasicMaterial({
+        color: 0x94a3b8,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const originMat = new THREE.MeshBasicMaterial({
+        color: 0x64748b,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+      const collarMat = new THREE.MeshBasicMaterial({
+        color: 0xff4f9a,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+      });
+
+      const rod = new THREE.Mesh(unitRodGeo.clone(), rodMat);
+      const originRing = new THREE.Mesh(ringGeo.clone(), originMat);
+      const partCollar = new THREE.Mesh(collarGeo.clone(), collarMat);
+
+      rod.frustumCulled = false;
+      this.explosionGuidesGroup.add(rod, originRing, partCollar);
+      this.explosionGuideItems.set(comp.id, { rod, originRing, partCollar });
+    }
+
+    unitRodGeo.dispose();
+    ringGeo.dispose();
+    collarGeo.dispose();
+  }
+
+  private rebuildStencilSectionPasses(project: DecoderProject): void {
+    for (const child of this.stencilCapGroup.children) {
+      const m = child as THREE.Mesh;
+      (m.material as THREE.Material | undefined)?.dispose();
+    }
+    this.stencilCapGroup.clear();
+    if (this.isSoftwareGl) return;
+
+    for (const comp of project.components) {
+      if (!comp.geometry || comp.layer === 'fluid') continue;
+      const srcObj = this.componentObjects.get(comp.id);
+      if (!srcObj || !(srcObj as THREE.Mesh).isMesh) continue;
+      const geo = (srcObj as THREE.Mesh).geometry;
+
+      const backStencilMat = new THREE.MeshBasicMaterial({
+        side: THREE.BackSide,
+        clippingPlanes: [this.clipPlane],
+        colorWrite: false,
+        depthWrite: false,
+        depthTest: false,
+        stencilWrite: true,
+        stencilFunc: THREE.AlwaysStencilFunc,
+        stencilFail: THREE.KeepStencilOp,
+        stencilZFail: THREE.KeepStencilOp,
+        stencilZPass: THREE.IncrementWrapStencilOp,
+      });
+
+      const frontStencilMat = new THREE.MeshBasicMaterial({
+        side: THREE.FrontSide,
+        clippingPlanes: [this.clipPlane],
+        colorWrite: false,
+        depthWrite: false,
+        depthTest: false,
+        stencilWrite: true,
+        stencilFunc: THREE.AlwaysStencilFunc,
+        stencilFail: THREE.KeepStencilOp,
+        stencilZFail: THREE.KeepStencilOp,
+        stencilZPass: THREE.DecrementWrapStencilOp,
+      });
+
+      const backMesh = new THREE.Mesh(geo, backStencilMat);
+      const frontMesh = new THREE.Mesh(geo, frontStencilMat);
+      backMesh.renderOrder = 1;
+      frontMesh.renderOrder = 1;
+      backMesh.matrixAutoUpdate = false;
+      frontMesh.matrixAutoUpdate = false;
+      backMesh.userData.sourceComponentId = comp.id;
+      frontMesh.userData.sourceComponentId = comp.id;
+
+      this.stencilCapGroup.add(backMesh, frontMesh);
+    }
+  }
+
   public loadProject(project: DecoderProject, resetCamera = true): void {
     this.project = project;
     this.runtime.setProject(project);
     this.lastGoodSimulation = undefined;
     this.state.time = 0;
+    this.currentExplosion = 0;
+    this.explosionVelocity = 0;
     this.paramValues = this.runtime.getDefaultParameters();
     this.explosionPlan = buildExplosionPlan(project);
     this.pathTracerSceneSynced = false;
+    this.lastContactShadowExplosion = -1;
 
     this.transformControls.detach();
     if (this.outlinePass) this.outlinePass.selectedObjects = [];
@@ -834,7 +1406,7 @@ export class DecoderViewport {
       this.baseTransforms.set(comp.id, { pos, rot, scale });
       this.componentObjects.set(comp.id, obj);
       objMap.set(comp.id, obj);
-      if ((obj as THREE.Mesh).isMesh) {
+      if ((obj as THREE.Mesh).isMesh || (obj as THREE.InstancedMesh).isInstancedMesh) {
         this.interactables.push(obj);
       }
     }
@@ -848,21 +1420,46 @@ export class DecoderViewport {
       }
     }
 
-    // Scale ground contact shadow & grid height cleanly to model footprint
     this.modelRoot.updateMatrixWorld(true);
     _tmpBox.setFromObject(this.modelRoot);
     this.modelRadius = _tmpBox.isEmpty() ? 0 : _tmpBox.getSize(_tmpSize).length() / 2;
     this.restReach = this.measureReach();
     this.explodeZoom = 1;
     this.lastFitExplosion = 0;
+
+    this.computeExplosionClearanceMap(project);
+    this.rebuildExplosionGuides(project);
+    this.rebuildStencilSectionPasses(project);
+
     _tmpBox.setFromObject(this.modelRoot);
     if (!_tmpBox.isEmpty()) {
       _tmpBox.getSize(_tmpSize);
-      const footprint = Math.max(2.2, Math.max(_tmpSize.x, _tmpSize.z) * 1.9);
+      _tmpBox.getCenter(_tmpCenter);
+      const footprint = Math.max(2.2, Math.max(_tmpSize.x, _tmpSize.z) * 2.15);
       this.shadowDisc.scale.set(footprint / 6.8, 1, footprint / 6.8);
       const floorY = Math.min(-0.02, _tmpBox.min.y - 0.015);
-      this.shadowDisc.position.y = floorY + 0.005;
+      this.shadowDisc.position.set(_tmpCenter.x, floorY + 0.005, _tmpCenter.z);
+      this.ptFloorCatcher.position.set(_tmpCenter.x, floorY + 0.002, _tmpCenter.z);
       this.gridHelper.position.y = floorY;
+
+      if (this.contactShadowCam && this.contactShadowDepthMat) {
+        const halfSpan = footprint * 0.5;
+        this.contactShadowCam.left = -halfSpan;
+        this.contactShadowCam.right = halfSpan;
+        this.contactShadowCam.top = halfSpan;
+        this.contactShadowCam.bottom = -halfSpan;
+        this.contactShadowCam.far = Math.max(4.5, _tmpSize.y * 3.2);
+        this.contactShadowCam.position.set(_tmpCenter.x, floorY + 0.004, _tmpCenter.z);
+        this.contactShadowCam.updateProjectionMatrix();
+        this.contactShadowDepthMat.uniforms['maxHeight'].value = Math.max(2.8, _tmpSize.y * 2.4);
+      }
+
+      const shadowSpan = Math.max(2.0, this.modelRadius * 2.35);
+      this.keyLight.shadow.camera.left = -shadowSpan;
+      this.keyLight.shadow.camera.right = shadowSpan;
+      this.keyLight.shadow.camera.top = shadowSpan;
+      this.keyLight.shadow.camera.bottom = -shadowSpan;
+      this.keyLight.shadow.camera.updateProjectionMatrix();
     }
 
     this.effectsManager.buildForProject(project.effects);
@@ -994,8 +1591,6 @@ export class DecoderViewport {
   }
 
   public updateState(next: Partial<ViewportState>): void {
-    // Playback time is owned by the viewport and changed only through setTime(),
-    // so a full UI state snapshot cannot rewind the simulation.
     const { time: _time, ...partial } = next;
     const prevPlaying = this.state.playing;
     const prevMode = this.state.examinationMode;
@@ -1080,7 +1675,6 @@ export class DecoderViewport {
     }
   }
 
-  /** Heat haze whose source sits inside a casing; it is shown only while the inside is on show. */
   private sealedHeatEffectIds = new Set<string>();
 
   private findSealedHeatEffects(project: DecoderProject): void {
@@ -1100,7 +1694,6 @@ export class DecoderViewport {
     }
   }
 
-  /** Heat haze only reads as heat when the inside of the model is on show. */
   private showsInterior(): boolean {
     const mode = this.state.examinationMode;
     return (
@@ -1147,7 +1740,6 @@ export class DecoderViewport {
       }
       const curve = new THREE.CatmullRomCurve3(pts);
       const style = RELATIONSHIP_LINE[rel.type] ?? 'solid';
-      // Flows are neutral grey and told apart by line style; links in a feedback loop are pink.
       const color = loopIds.has(rel.id) ? FLOW_LOOP_COLOUR : FLOW_COLOUR;
       const baseOpacity = style === 'faint' ? 0.5 : 0.85;
       const mat = new THREE.MeshBasicMaterial({
@@ -1179,6 +1771,7 @@ export class DecoderViewport {
       mat.color.copy(baseMat.color);
       mat.roughness = baseMat.roughness;
       mat.metalness = baseMat.metalness;
+      mat.transmission = baseMat.transmission;
       mat.wireframe = false;
       mat.transparent = baseMat.transparent;
       mat.opacity = baseMat.opacity;
@@ -1193,16 +1786,19 @@ export class DecoderViewport {
       }
 
       if (mode === 'cutaway' && (comp.layer === 'casing' || comp.layer === 'exterior')) {
+        mat.transmission = 0;
         mat.transparent = true;
         mat.opacity = 0.16;
         mat.depthWrite = false;
       } else if (mode === 'xray') {
+        mat.transmission = 0;
         mat.transparent = true;
         mat.opacity = comp.layer === 'core' || comp.layer === 'internal' ? 0.74 : 0.18;
         mat.depthWrite = false;
         mat.emissive.set('#6f7d8c');
         mat.emissiveIntensity = 0.18;
       } else if (mode === 'transparent') {
+        mat.transmission = 0;
         mat.transparent = true;
         mat.opacity = 0.35;
         mat.depthWrite = false;
@@ -1210,6 +1806,7 @@ export class DecoderViewport {
         mat.wireframe = true;
       } else if (mode === 'isolated' && selId) {
         if (comp.id !== selId && comp.parentId !== selId) {
+          mat.transmission = 0;
           mat.transparent = true;
           mat.opacity = 0.1;
           mat.depthWrite = false;
@@ -1223,6 +1820,7 @@ export class DecoderViewport {
         mat.color.set(tint);
         mat.roughness = 0.5;
         mat.metalness = 0.1;
+        mat.transmission = 0;
       } else if (mode === 'material') {
         mat.wireframe = false;
         mat.transparent = false;
@@ -1231,6 +1829,7 @@ export class DecoderViewport {
       } else if (mode === 'relationship_trace' && trace) {
         const isRelated = comp.id === selId || trace.upstreamIds.has(comp.id) || trace.downstreamIds.has(comp.id);
         if (!isRelated) {
+          mat.transmission = 0;
           mat.transparent = true;
           mat.opacity = 0.14;
           mat.depthWrite = false;
@@ -1238,9 +1837,6 @@ export class DecoderViewport {
       }
 
       if (comp.id === selId || this.state.highlightedComponentIds.includes(comp.id)) {
-        // Selection is a thin pink outline plus a faint neutral lift, so the material keeps its colour.
-        // Selection is a thin pink outline (drawn by the outline pass) and a faint lift that keeps the
-        // material's own colour. Without post-processing, a low pink glow stands in for the outline.
         if (mat.emissiveIntensity < 0.06) {
           const outlined = Boolean(this.outlinePass) && !this.isSoftwareGl;
           mat.emissive.set(outlined ? '#ffffff' : '#ff4f9a');
@@ -1253,7 +1849,6 @@ export class DecoderViewport {
     this.updateSelectionOutline();
   }
 
-  /** Feeds the selected and highlighted parts to the outline pass. */
   private updateSelectionOutline(): void {
     if (!this.outlinePass) return;
     const selId = this.state.selectedComponentId;
@@ -1280,6 +1875,8 @@ export class DecoderViewport {
     const active = sec.enabled || this.state.examinationMode === 'cross_section';
     this.renderer.localClippingEnabled = active;
     this.sectionHelperMesh.visible = active;
+    this.stencilCapGroup.visible = active && !this.isSoftwareGl;
+    this.sectionCapMesh.visible = active && !this.isSoftwareGl;
 
     if (!active) {
       this.clipPlane.constant = 999;
@@ -1301,6 +1898,104 @@ export class DecoderViewport {
       this.sectionHelperMesh.position.set(0, 0.5, sec.position * 2);
     }
     this.clipPlane.constant = sec.position * 2 * dir;
+
+    this.clipPlane.coplanarPoint(this.sectionCapMesh.position);
+    this.sectionCapMesh.lookAt(
+      this.sectionCapMesh.position.x - this.clipPlane.normal.x,
+      this.sectionCapMesh.position.y - this.clipPlane.normal.y,
+      this.sectionCapMesh.position.z - this.clipPlane.normal.z,
+    );
+
+    if (this.stencilCapGroup.visible) {
+      this.modelRoot.updateMatrixWorld(true);
+      for (const child of this.stencilCapGroup.children) {
+        const cid = child.userData.sourceComponentId as string | undefined;
+        const src = cid ? this.componentObjects.get(cid) : undefined;
+        if (src) {
+          child.visible = src.visible;
+          child.matrix.copy(src.matrixWorld);
+          child.matrixWorld.copy(src.matrixWorld);
+        }
+      }
+    }
+  }
+
+  private computeStagedComponentExplosionProgress(compId: string, globalExplosion: number): number {
+    if (globalExplosion <= 0.0005) return 0;
+    if (globalExplosion >= 0.999) return 1;
+    const order = this.explosionPlan.order;
+    const idx = order.indexOf(compId);
+    if (idx === -1 || order.length <= 1) return globalExplosion;
+
+    const rankFrac = idx / (order.length - 1);
+    const windowSpan = 0.68;
+    const delay = rankFrac * (1 - windowSpan);
+    const t = THREE.MathUtils.clamp((globalExplosion - delay) / windowSpan, 0, 1);
+    return t * t * (3 - 2 * t);
+  }
+
+  private updateExplosionGuideVisuals(): void {
+    const showGuides = this.currentExplosion > 0.03;
+    this.explosionGuidesGroup.visible = showGuides;
+    if (!showGuides) return;
+
+    this.modelRoot.updateMatrixWorld(true);
+    const selId = this.state.selectedComponentId;
+    const globalFade = THREE.MathUtils.smoothstep(this.currentExplosion, 0.03, 0.2);
+
+    for (const [cid, guide] of this.explosionGuideItems.entries()) {
+      const obj = this.componentObjects.get(cid);
+      const base = this.baseTransforms.get(cid);
+      if (!obj || !base || !obj.visible) {
+        guide.rod.visible = false;
+        guide.originRing.visible = false;
+        guide.partCollar.visible = false;
+        continue;
+      }
+
+      obj.getWorldPosition(_wPosB);
+      if (obj.parent) {
+        _wPosA.set(base.pos[0], base.pos[1], base.pos[2]).applyMatrix4(obj.parent.matrixWorld);
+      } else {
+        _wPosA.set(base.pos[0], base.pos[1], base.pos[2]);
+      }
+
+      _wDir.subVectors(_wPosB, _wPosA);
+      const dist = _wDir.length();
+      if (dist < 0.035) {
+        guide.rod.visible = false;
+        guide.originRing.visible = false;
+        guide.partCollar.visible = false;
+        continue;
+      }
+
+      guide.rod.visible = true;
+      guide.originRing.visible = true;
+      guide.partCollar.visible = true;
+
+      // Orient & stretch 3D guide cylinder cleanly from seated origin to exploded component
+      guide.rod.position.copy(_wPosA).addScaledVector(_wDir, 0.5);
+      guide.rod.scale.set(1, dist, 1);
+      _wDir.normalize();
+      guide.rod.quaternion.setFromUnitVectors(_upVec, _wDir);
+
+      guide.originRing.position.copy(_wPosA);
+      guide.originRing.quaternion.setFromUnitVectors(_upVec, _wDir);
+      guide.partCollar.position.copy(_wPosB);
+
+      const isSelected = cid === selId || this.state.highlightedComponentIds.includes(cid);
+      const rodMat = guide.rod.material as THREE.MeshBasicMaterial;
+      rodMat.color.setHex(isSelected ? 0xff4f9a : 0x7dd3fc);
+      rodMat.opacity = globalFade * (isSelected ? 0.88 : 0.36);
+
+      const origMat = guide.originRing.material as THREE.MeshBasicMaterial;
+      origMat.color.setHex(isSelected ? 0xff4f9a : 0x94a3b8);
+      origMat.opacity = globalFade * (isSelected ? 0.9 : 0.48);
+
+      const colMat = guide.partCollar.material as THREE.MeshBasicMaterial;
+      colMat.color.setHex(isSelected ? 0xff4f9a : 0xe2e8f0);
+      colMat.opacity = globalFade * (isSelected ? 0.95 : 0.62);
+    }
   }
 
   public stepSimulation(dt: number): EvaluatedSimulationState {
@@ -1321,9 +2016,22 @@ export class DecoderViewport {
 
     const targetExp =
       this.state.examinationMode === 'exploded' ? Math.max(0.45, this.state.explosion) : this.state.explosion;
-    this.currentExplosion = this.isSoftwareGl
-      ? targetExp
-      : THREE.MathUtils.damp(this.currentExplosion, targetExp, 7, Math.max(0.016, dt));
+
+    if (this.isSoftwareGl || dt <= 0) {
+      this.currentExplosion = targetExp;
+      this.explosionVelocity = 0;
+    } else {
+      const omega = 11.5;
+      const x = this.currentExplosion - targetExp;
+      const expTerm = Math.exp(-omega * dt);
+      const temp = (this.explosionVelocity + omega * x) * dt;
+      this.explosionVelocity = (this.explosionVelocity - omega * temp) * expTerm;
+      this.currentExplosion = targetExp + (x + temp) * expTerm;
+      if (Math.abs(this.currentExplosion - targetExp) < 0.0004 && Math.abs(this.explosionVelocity) < 0.002) {
+        this.currentExplosion = targetExp;
+        this.explosionVelocity = 0;
+      }
+    }
 
     for (const comp of this.project.components) {
       const obj = this.componentObjects.get(comp.id);
@@ -1331,12 +2039,18 @@ export class DecoderViewport {
       if (!obj || !base) continue;
 
       const beh = simState.transforms[comp.id];
-      const expOffset = computeHierarchicalExplosionOffset(comp, this.currentExplosion, this.explosionPlan);
+      const stagedProgress = this.computeStagedComponentExplosionProgress(comp.id, this.currentExplosion);
+      const expOffset = computeHierarchicalExplosionOffset(comp, stagedProgress, this.explosionPlan);
+      const extraClear = this.explosionExtraClearance.get(comp.id);
+
+      const ex = expOffset[0] + (extraClear ? extraClear[0] * stagedProgress : 0);
+      const ey = expOffset[1] + (extraClear ? extraClear[1] * stagedProgress : 0);
+      const ez = expOffset[2] + (extraClear ? extraClear[2] * stagedProgress : 0);
 
       obj.position.set(
-        base.pos[0] + (beh?.position_x ?? 0) + expOffset[0],
-        base.pos[1] + (beh?.position_y ?? 0) + expOffset[1],
-        base.pos[2] + (beh?.position_z ?? 0) + expOffset[2],
+        base.pos[0] + (beh?.position_x ?? 0) + ex,
+        base.pos[1] + (beh?.position_y ?? 0) + ey,
+        base.pos[2] + (beh?.position_z ?? 0) + ez,
       );
       obj.rotation.set(
         base.rot[0] + (beh?.rotation_x ?? 0),
@@ -1372,6 +2086,7 @@ export class DecoderViewport {
     }
 
     this.refitForExplosion();
+    this.updateExplosionGuideVisuals();
     this.applySectionPlane();
     this.effectsManager.update(
       this.state.time,
@@ -1381,7 +2096,6 @@ export class DecoderViewport {
       this.showsInterior() ? undefined : this.sealedHeatEffectIds,
     );
 
-    // Update DOF focal distance dynamically when enabled
     if (this.bokehPass && this.bokehPass.enabled) {
       let focusDist = this.camera.position.distanceTo(this.controls.target);
       if (this.state.selectedComponentId) {
@@ -1394,7 +2108,6 @@ export class DecoderViewport {
       (this.bokehPass.uniforms as Record<string, THREE.IUniform>)['focus'].value = Math.max(0.2, focusDist);
     }
 
-    // Camera tween damping
     if (this.cameraTweenTarget) {
       const alpha = 1 - Math.exp(-6 * Math.max(0.016, dt));
       _dampPos.copy(this.camera.position).lerp(this.cameraTweenTarget.pos, alpha);
@@ -1435,16 +2148,37 @@ export class DecoderViewport {
 
   private renderFrame(): void {
     if (this.shouldUsePathTracer()) {
-      // Swap equirectangular HDR texture for WebGLPathTracer sampling
       if (this.hdrEquirectTex && this.scene.environment !== this.hdrEquirectTex) {
         this.scene.environment = this.hdrEquirectTex;
       }
       if (!this.pathTracerSceneSynced) {
+        const prevEffects = this.effectsManager.root.visible;
+        const prevGrid = this.gridHelper.visible;
+        const prevShadow = this.shadowDisc.visible;
+        const prevGuides = this.explosionGuidesGroup.visible;
+        const prevSec = this.sectionHelperMesh.visible;
+        const prevCap = this.sectionCapMesh.visible;
+        const prevStencil = this.stencilCapGroup.visible;
+
         this.effectsManager.root.visible = false;
         this.gridHelper.visible = false;
+        this.shadowDisc.visible = false;
+        this.explosionGuidesGroup.visible = false;
+        this.sectionHelperMesh.visible = false;
+        this.sectionCapMesh.visible = false;
+        this.stencilCapGroup.visible = false;
+        this.ptFloorCatcher.visible = true;
+
         const ok = this.pathTracer.syncScene(this.scene, this.camera);
-        this.gridHelper.visible = true;
-        this.effectsManager.root.visible = this.state.showEffects;
+
+        this.ptFloorCatcher.visible = false;
+        this.gridHelper.visible = prevGrid;
+        this.shadowDisc.visible = prevShadow;
+        this.explosionGuidesGroup.visible = prevGuides;
+        this.sectionHelperMesh.visible = prevSec;
+        this.sectionCapMesh.visible = prevCap;
+        this.stencilCapGroup.visible = prevStencil;
+        this.effectsManager.root.visible = prevEffects;
         this.pathTracerSceneSynced = ok;
       }
       if (this.pathTracerSceneSynced) {
@@ -1454,10 +2188,11 @@ export class DecoderViewport {
       }
     }
 
-    // Restore PMREM environment for rasterization + EffectComposer
     if (this.pmremEnvTex && this.scene.environment !== this.pmremEnvTex) {
       this.scene.environment = this.pmremEnvTex;
     }
+
+    this.renderContactShadow();
 
     if (this.composer && !this.isSoftwareGl && this.state.transformMode === 'none') {
       this.composer.render();
@@ -1497,14 +2232,22 @@ export class DecoderViewport {
     this.frameId = requestAnimationFrame(() => {
       if (this.disposed) return;
       this.renderDirty = false;
+
+      const targetExp =
+        this.state.examinationMode === 'exploded' ? Math.max(0.45, this.state.explosion) : this.state.explosion;
+      const explosionSettling = !this.isSoftwareGl && Math.abs(this.currentExplosion - targetExp) > 0.0005;
+      if (explosionSettling || this.cameraTweenTarget) {
+        this.stepSimulation(0.016);
+      }
+
       this.controls.update();
       this.renderFrame();
       const done = () => {
         this.renderBusy = false;
+        const stillExploding = !this.isSoftwareGl && Math.abs(this.currentExplosion - targetExp) > 0.0005;
         const ptNeedsMoreSamples =
           this.shouldUsePathTracer() && this.pathTracer.getStatus(true).samples < this.pathTracer.targetSamples;
-        if (this.renderDirty || this.cameraTweenTarget || ptNeedsMoreSamples) {
-          if (this.cameraTweenTarget) this.stepSimulation(0.016);
+        if (this.renderDirty || this.cameraTweenTarget || stillExploding || ptNeedsMoreSamples) {
           this.requestRender();
         }
       };
@@ -1516,8 +2259,6 @@ export class DecoderViewport {
   private startLoop(): void {
     cancelAnimationFrame(this.frameId);
     clearTimeout(this.frameId);
-    // Cancelling may drop an on-demand render before its completion callback runs; release it so
-    // requestRender() is not locked out for good.
     this.renderBusy = false;
 
     const tick = () => {
@@ -1577,7 +2318,34 @@ export class DecoderViewport {
     dom.removeEventListener('webglcontextrestored', this.onWebglContextRestored);
     window.removeEventListener('resize', this.onResize);
 
+    for (const item of this.explosionGuideItems.values()) {
+      item.rod.geometry.dispose();
+      (item.rod.material as THREE.Material).dispose();
+      item.originRing.geometry.dispose();
+      (item.originRing.material as THREE.Material).dispose();
+      item.partCollar.geometry.dispose();
+      (item.partCollar.material as THREE.Material).dispose();
+    }
+    this.explosionGuideItems.clear();
+
+    for (const child of this.stencilCapGroup.children) {
+      ((child as THREE.Mesh).material as THREE.Material | undefined)?.dispose();
+    }
+
+    this.contactShadowRT?.dispose();
+    this.contactShadowBlurRT?.dispose();
+    this.contactShadowDepthMat?.dispose();
+    this.contactShadowHBlurMat?.dispose();
+    this.contactShadowVBlurMat?.dispose();
+    this.contactShadowBlurQuad?.geometry.dispose();
+
+    this.ptFloorCatcher.geometry.dispose();
+    (this.ptFloorCatcher.material as THREE.Material).dispose();
+    this.sectionCapMesh.geometry.dispose();
+    (this.sectionCapMesh.material as THREE.Material).dispose();
+
     this.outlinePass?.dispose();
+    this.bloomPass?.dispose();
     this.pathTracer.dispose();
     this.composer?.dispose();
     this.transformControls.dispose();
